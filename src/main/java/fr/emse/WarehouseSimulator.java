@@ -194,22 +194,21 @@ public class WarehouseSimulator extends ColorSimFactory {
     }
 
     /**
-     * Removes robot and its pallet from the simulation.
+     * Removes robot and its pallet from the simulation after successful delivery.
      * @param robot Robot to remove
      */
     private void removeRobotAndPallet(WarehouseRobot robot) {
         Pallet pallet = robot.getCurrentPallet();
 
-        // Remove pallet from grid
+        // Remove pallet from tracking (pallet is not on grid, it's carried by robot)
         if (pallet != null) {
-            this.environment.removeCellContent(pallet.getX(), pallet.getY());
             activePallets.remove(pallet);
-            System.out.println("Removed pallet from (" + pallet.getX() + "," + pallet.getY() + ")");
+            System.out.println("Removed pallet #" + pallet.getId() + " from tracking");
         }
 
-        // Remove robot from grid
+        // Remove robot from grid and component list
         this.environment.removeCellContent(robot.getX(), robot.getY());
-        System.out.println("Removed robot '" + robot.getName() + "' from (" +
+        System.out.println("Removed robot '" + robot.getName() + "' from grid at (" +
                            robot.getX() + "," + robot.getY() + ")");
     }
 
@@ -251,16 +250,16 @@ public class WarehouseSimulator extends ColorSimFactory {
                 r.move(1);
                 updateEnvironment(oldPos, r.getLocation(), r.getId());
 
-                // Check if robot reached goal - handle delivery
+                // Check if robot reached goal - handle delivery and remove IMMEDIATELY
                 if (r.hasReachedGoal()) {
                     handleDelivery(r);
+                    removeRobotAndPallet(r);  // Remove from grid immediately to free the goal
                     robotsToRemove.add(r);
                 }
             }
 
-            // Remove delivered robots and their pallets
+            // Remove delivered robots from tracking list
             for (WarehouseRobot wr : robotsToRemove) {
-                removeRobotAndPallet(wr);
                 activeRobots.remove(wr);  // Remove from our tracking list
             }
 

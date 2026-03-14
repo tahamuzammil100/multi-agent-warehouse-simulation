@@ -189,79 +189,175 @@ public class WarehouseRobot extends BasicRobot {
     }
 
     /**
-     * Attempts to move toward the goal position with enhanced obstacle avoidance.
-     * Checks both left AND right when blocked and chooses the better direction.
+     * Override freeForward to check the correct cell based on current orientation.
+     * The base class only checks "up" direction, but we need to check based on actual orientation.
+     * Also treats the goal position as valid even if it contains the ExitZone component.
+     * @return true if forward cell is free or is the goal
+     */
+    @Override
+    protected boolean freeForward() {
+        if (grid == null) {
+            return false;
+        }
+
+        // Determine which cell to check based on current orientation
+        int gridX = field;  // Center of perception grid
+        int gridY = field;  // Center of perception grid
+
+        switch (this.orientation) {
+            case up:    gridX = field - 1; gridY = field; break;     // Up is row - 1
+            case down:  gridX = field + 1; gridY = field; break;     // Down is row + 1
+            case left:  gridX = field; gridY = field - 1; break;     // Left is col - 1
+            case right: gridX = field; gridY = field + 1; break;     // Right is col + 1
+        }
+
+        if (SimFactory.DEBUG == 1) {
+            System.out.println("      freeForward: orientation=" + this.orientation + ", checking grid[" + gridX + "][" + gridY + "]");
+        }
+
+        // Check if the cell exists
+        ColorSimpleCell cell = grid[gridX][gridY];
+
+        if (cell == null) {
+            if (SimFactory.DEBUG == 1) {
+                System.out.println("      cell: NULL (out of bounds)");
+            }
+            return false;
+        }
+
+        // Calculate what world position this cell represents
+        int targetWorldX = x;
+        int targetWorldY = y;
+        switch (this.orientation) {
+            case up:    targetWorldX = x - 1; break;
+            case down:  targetWorldX = x + 1; break;
+            case left:  targetWorldY = y - 1; break;
+            case right: targetWorldY = y + 1; break;
+        }
+
+        // Check if this is the goal position - if so, it's always valid
+        if (goalPosition != null && targetWorldX == goalPosition[0] && targetWorldY == goalPosition[1]) {
+            if (SimFactory.DEBUG == 1) {
+                System.out.println("      cell: GOAL position - valid!");
+            }
+            return true;
+        }
+
+        // Otherwise check if cell is empty
+        boolean isFree = cell.getContent() == null;
+
+        if (SimFactory.DEBUG == 1) {
+            System.out.println("      cell content: " + (cell.getContent() != null ? cell.getContent().getClass().getSimpleName() : "null (FREE)"));
+        }
+
+        return isFree;
+    }
+
+    /**
+     * Attempts to move toward the goal position with distance-based greedy algorithm.
+     * ONLY accepts moves that DECREASE the distance from current position (strict improvement).
+     * Checks all 4 directions and picks the one with smallest resulting distance.
      * @param dx Horizontal distance to goal (positive = right)
      * @param dy Vertical distance to goal (positive = down)
      * @return true if robot moved or turned
      */
     private boolean tryMoveTowardGoal(int dx, int dy) {
-        // Determine desired direction based on larger distance component
-        Orientation desiredOrientation;
-        if (Math.abs(dx) > Math.abs(dy)) {
-            // Horizontal movement more important
-            desiredOrientation = (dx > 0) ? Orientation.right : Orientation.left;
-        } else if (Math.abs(dy) > Math.abs(dx)) {
-            // Vertical movement more important
-            desiredOrientation = (dy > 0) ? Orientation.down : Orientation.up;
-        } else if (dx != 0) {
-            // Equal distance, prefer horizontal
-            desiredOrientation = (dx > 0) ? Orientation.right : Orientation.left;
-        } else if (dy != 0) {
-            // Only vertical movement needed
-            desiredOrientation = (dy > 0) ? Orientation.down : Orientation.up;
-        } else {
-            // Already at goal
-            return false;
+        int currentDistance = Math.abs(dx) + Math.abs(dy);
+
+        // Check all 4 directions to find the one that DECREASES distance most
+        Orientation[] directions = {Orientation.up, Orientation.down, Orientation.left, Orientation.right};
+        Orientation bestDirection = null;
+        int bestDistance = currentDistance;  // Start with current distance as threshold
+
+        if (SimFactory.DEBUG == 1) {
+            System.out.println("  Current distance: " + currentDistance);
+            System.out.println("  Checking all 4 directions from (" + x + "," + y + "):");
         }
 
-        // Turn to face desired direction
-        while (this.orientation != desiredOrientation) {
-            turnLeft();
-        }
-
-        // Try to move forward in desired direction
-        if (freeForward()) {
-            moveForward();
-            return true;
-        } else {
-            // Path blocked - Enhanced obstacle avoidance: check BOTH left AND right
-            boolean leftFree = freeLeft();
-            boolean rightFree = freeRight();
-
-            if (rightFree && leftFree) {
-                // Both free - choose based on which direction helps reach goal
-                // Turn right if it helps, otherwise turn left
-                if (Math.random() < 0.5) {
-                    turnRight();
-                } else {
-                    turnLeft();
-                }
-                moveForward();
-                return true;
-            } else if (rightFree) {
-                // Only right is free
-                turnRight();
-                moveForward();
-                return true;
-            } else if (leftFree) {
-                // Only left is free
+        for (Orientation dir : directions) {
+            // Temporarily orient to this direction to check if it's free
+            Orientation originalOrientation = this.orientation;
+            while (this.orientation != dir) {
                 turnLeft();
-                moveForward();
-                return true;
+            }
+
+            boolean isFree = freeForward();
+
+            if (isFree) {
+                // Calculate where we'd be if we moved forward
+                int newX = x;
+                int newY = y;
+                switch (this.orientation) {
+                    case up:    newX = x - 1; break;
+                    case down:  newX = x + 1; break;
+                    case left:  newY = y - 1; break;
+                    case right: newY = y + 1; break;
+                }
+
+                // Calculate distance from that new position to goal
+                int newDx = goalPosition[0] - newX;
+                int newDy = goalPosition[1] - newY;
+                int newDistance = Math.abs(newDx) + Math.abs(newDy);
+
+                if (SimFactory.DEBUG == 1) {
+                    System.out.println("    " + dir + " -> (" + newX + "," + newY + ") free=true, distance=" + newDistance);
+                }
+
+                // ONLY accept moves that DECREASE distance (strict improvement)
+                if (newDistance < bestDistance) {
+                    bestDistance = newDistance;
+                    bestDirection = dir;
+                }
             } else {
-                // Both blocked, turn around
-                turnRight();
-                turnRight();
-                if (freeForward()) {
-                    moveForward();
-                    return true;
-                } else {
-                    // Completely surrounded
-                    return false;
+                if (SimFactory.DEBUG == 1) {
+                    System.out.println("    " + dir + " -> blocked");
                 }
             }
+
+            // Restore original orientation
+            while (this.orientation != originalOrientation) {
+                turnLeft();
+            }
         }
+
+        if (SimFactory.DEBUG == 1) {
+            System.out.println("  Best direction: " + bestDirection + " (new distance: " + bestDistance + ")");
+        }
+
+        // Move in the best direction found
+        if (bestDirection != null) {
+            while (this.orientation != bestDirection) {
+                turnLeft();
+            }
+            moveForward();
+            return true;
+        }
+
+        // No improving move found - try any free direction to avoid being stuck
+        if (SimFactory.DEBUG == 1) {
+            System.out.println("  No improving move, trying any free direction...");
+        }
+
+        for (Orientation dir : directions) {
+            Orientation originalOrientation = this.orientation;
+            while (this.orientation != dir) {
+                turnLeft();
+            }
+
+            if (freeForward()) {
+                if (SimFactory.DEBUG == 1) {
+                    System.out.println("  Taking random move: " + dir);
+                }
+                moveForward();
+                return true;
+            }
+
+            while (this.orientation != originalOrientation) {
+                turnLeft();
+            }
+        }
+
+        return false;
     }
 
     @Override
