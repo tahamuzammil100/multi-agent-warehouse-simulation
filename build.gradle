@@ -20,5 +20,5 @@ dependencies {
 
 tasks.named('run') {
   classpath = sourceSets.main.runtimeClasspath
-  mainClass = 'fr.emse.BasicSimulator'
+  mainClass = 'fr.emse.WarehouseSimulator'
 }

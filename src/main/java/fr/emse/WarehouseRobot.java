@@ -16,6 +16,8 @@ public class WarehouseRobot extends BasicRobot {
     private Pallet currentPallet;      // Pallet being carried (null if none)
     private int[] goalPosition;        // Target position [x, y] to reach
     private int targetZoneId;          // ID of target exit zone
+    private int wallFollowCounter;     // Steps remaining in wall-follow mode
+    private static final int WALL_FOLLOW_STEPS = 5; // How long to follow wall before retrying goal
 
     /**
      * Creates a new warehouse robot.
@@ -33,6 +35,7 @@ public class WarehouseRobot extends BasicRobot {
         this.currentPallet = null;
         this.goalPosition = null;
         this.targetZoneId = -1;
+        this.wallFollowCounter = 0;
     }
 
     /**
@@ -92,7 +95,7 @@ public class WarehouseRobot extends BasicRobot {
 
     /**
      * Enhanced movement that navigates toward the goal.
-     * Uses simple navigation: move in direction of goal, avoid obstacles.
+     * Uses wall-following when stuck: picks a direction and commits to it.
      */
     @Override
     public void move(int nb) {
@@ -112,24 +115,59 @@ public class WarehouseRobot extends BasicRobot {
                 return;
             }
 
-            // Calculate direction to goal
-            int dx = goalPosition[0] - this.x;  // Positive = goal is to the right
-            int dy = goalPosition[1] - this.y;  // Positive = goal is below
+            boolean moved = false;
 
-            // Try to move toward goal
-            boolean moved = tryMoveTowardGoal(dx, dy);
+            // Wall-following mode: keep moving in current direction
+            if (wallFollowCounter > 0) {
+                if (freeForward()) {
+                    moveForward();
+                    wallFollowCounter--;
+                    moved = true;
+                } else {
+                    // Hit obstacle while wall-following, find new direction
+                    wallFollowCounter = 0;
+                    moved = findAndCommitToFreeDirection();
+                }
+            } else {
+                // Normal mode: try to move toward goal
+                int dx = goalPosition[0] - this.x;
+                int dy = goalPosition[1] - this.y;
+                moved = tryMoveTowardGoal(dx, dy);
+
+                // If blocked, enter wall-following mode
+                if (!moved) {
+                    moved = findAndCommitToFreeDirection();
+                }
+            }
 
             if (!moved && SimFactory.DEBUG == 1) {
-                System.out.println("Robot " + name + " stuck at (" + x + "," + y +
-                                   "), orientation: " + orientation);
+                System.out.println("Robot " + name + " completely stuck at (" + x + "," + y + ")");
             }
         }
 
         if (SimFactory.DEBUG == 1) {
             System.out.println("Robot " + name + " at (" + x + "," + y +
                                "), goal: (" + goalPosition[0] + "," + goalPosition[1] +
-                               "), distance: " + (Math.abs(goalPosition[0] - x) + Math.abs(goalPosition[1] - y)) + ")");
+                               "), distance: " + (Math.abs(goalPosition[0] - x) + Math.abs(goalPosition[1] - y)) + ")" +
+                               ", wallFollow: " + wallFollowCounter);
         }
+    }
+
+    /**
+     * Finds a free direction and commits to moving in it for several steps.
+     * @return true if found a direction to move
+     */
+    private boolean findAndCommitToFreeDirection() {
+        // Try all four directions to find a free one
+        for (int turns = 0; turns < 4; turns++) {
+            if (freeForward()) {
+                moveForward();
+                wallFollowCounter = WALL_FOLLOW_STEPS;  // Commit to this direction
+                return true;
+            }
+            turnRight();  // Try next direction
+        }
+        return false;  // Completely surrounded
     }
 
     /**

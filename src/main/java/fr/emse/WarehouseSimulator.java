@@ -25,8 +25,9 @@ public class WarehouseSimulator extends ColorSimFactory {
     private ExitZone exitZone;         // Exit zone (Zone Z)
 
     // Pallets and tracking
-    private List<Pallet> activePallets;      // Pallets currently in system
-    private int palletCounter;               // Counter for pallet IDs
+    private List<Pallet> activePallets;           // Pallets currently in system
+    private int palletCounter;                    // Counter for pallet IDs
+    private List<WarehouseRobot> activeRobots;    // Track robots manually
 
     // Statistics (for Phase 6)
     private int totalDeliveryTime;           // Sum of all delivery times
@@ -36,6 +37,7 @@ public class WarehouseSimulator extends ColorSimFactory {
     public WarehouseSimulator(SimProperties sp) {
         super(sp);
         this.activePallets = new ArrayList<>();
+        this.activeRobots = new ArrayList<>();
         this.palletCounter = 0;
         this.totalDeliveryTime = 0;
         this.palletsDelivered = 0;
@@ -96,37 +98,8 @@ public class WarehouseSimulator extends ColorSimFactory {
 
     @Override
     public void createRobot() {
-        // Create initial pallet and robot directly
-        System.out.println("Creating initial pallet and robot in createRobot()...");
-
-        // Create pallet
-        int[] palletRgb = new int[]{255, 255, 0};  // Yellow
-        int[] palletPos = new int[]{entryZonePosition[0], entryZonePosition[1]};
-        Pallet pallet = new Pallet(palletPos, palletRgb, currentStep, exitZone.getZoneId());
-        pallet.setLocation(palletPos);
-        addNewComponent(pallet);
-        activePallets.add(pallet);
-        palletCounter++;
-        System.out.println("Created pallet #" + palletCounter + " at entry zone");
-
-        // Create robot
-        int[] robotPos = new int[]{entryZonePosition[0], entryZonePosition[1]};
-        WarehouseRobot robot = new WarehouseRobot(
-            "Robot" + palletCounter,
-            this.sp.field,
-            this.sp.debug,
-            robotPos,
-            this.sp.colorrobot,
-            this.sp.rows,
-            this.sp.columns
-        );
-        robot.assignPallet(pallet);
-        robot.setGoalPosition(exitZone.getPosition());
-
-        System.out.println("DEBUG: Adding robot directly in createRobot()");
-        addNewComponent(robot);
-        System.out.println("DEBUG: Robot count after add: " + this.environment.getRobot().size());
-        System.out.println("Created robot '" + robot.getName() + "' with pallet");
+        // Don't create robots here - will be created in schedule()
+        System.out.println("Robot creation will be done at start of schedule()");
     }
 
     /**
@@ -170,10 +143,8 @@ public class WarehouseSimulator extends ColorSimFactory {
         robot.assignPallet(pallet);
         robot.setGoalPosition(exitZone.getPosition());
 
-        System.out.println("DEBUG: About to add robot with ID: " + robot.getId());
-        System.out.println("DEBUG: Robot is instance of ColorRobot: " + (robot instanceof fr.emse.fayol.maqit.simulator.components.ColorRobot));
         addNewComponent(robot);
-        System.out.println("DEBUG: Robot added. Current robot count from environment: " + this.environment.getRobot().size());
+        activeRobots.add(robot);  // Track robot manually
 
         System.out.println("Created robot '" + robot.getName() +
                            "' at entry zone with pallet #" + palletCounter);
@@ -245,17 +216,22 @@ public class WarehouseSimulator extends ColorSimFactory {
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void schedule() {
-        List<ColorRobot<ColorSimpleCell>> robots = this.environment.getRobot();
-        System.out.println("DEBUG: Initial robot count: " + robots.size());
+        // Create first pallet and robot at start of simulation
+        System.out.println("\n--- Creating first pallet and robot ---");
+        Pallet firstPallet = createPallet();
+        createRobotWithPallet(firstPallet);
+        refreshGW();
+
+        System.out.println("Initial robot count: " + activeRobots.size());
 
         for (int i = 0; i < this.sp.step; i++) {
             currentStep = i;
             System.out.println("\n========== Step: " + currentStep + " ==========");
-            System.out.println("Active robots: " + robots.size());
+            System.out.println("Active robots: " + activeRobots.size());
 
             // Distribute messages between robots (for future use)
-            for (ColorRobot<ColorSimpleCell> r : robots) {
-                for (ColorRobot<ColorSimpleCell> rr : robots) {
+            for (WarehouseRobot r : activeRobots) {
+                for (WarehouseRobot rr : activeRobots) {
                     for (Message m : (List<Message>) ((ColorInteractionRobot) rr).popSentMessages()) {
                         if (r.getId() != rr.getId()) {
                             ((ColorInteractionRobot) r).receiveMessage(m);
@@ -265,10 +241,10 @@ public class WarehouseSimulator extends ColorSimFactory {
             }
 
             // Move each robot and check for deliveries
-            List<ColorRobot<ColorSimpleCell>> robotsCopy = new ArrayList<>(robots);
+            List<WarehouseRobot> robotsCopy = new ArrayList<>(activeRobots);
             List<WarehouseRobot> robotsToRemove = new ArrayList<>();
 
-            for (ColorRobot<ColorSimpleCell> r : robotsCopy) {
+            for (WarehouseRobot r : robotsCopy) {
                 int[] oldPos = r.getLocation();
                 ColorSimpleCell[][] per = this.environment.getNeighbor(r.getX(), r.getY(), r.getField());
                 r.updatePerception(per);
@@ -276,18 +252,16 @@ public class WarehouseSimulator extends ColorSimFactory {
                 updateEnvironment(oldPos, r.getLocation(), r.getId());
 
                 // Check if robot reached goal - handle delivery
-                if (r instanceof WarehouseRobot) {
-                    WarehouseRobot wr = (WarehouseRobot) r;
-                    if (wr.hasReachedGoal()) {
-                        handleDelivery(wr);
-                        robotsToRemove.add(wr);
-                    }
+                if (r.hasReachedGoal()) {
+                    handleDelivery(r);
+                    robotsToRemove.add(r);
                 }
             }
 
             // Remove delivered robots and their pallets
             for (WarehouseRobot wr : robotsToRemove) {
                 removeRobotAndPallet(wr);
+                activeRobots.remove(wr);  // Remove from our tracking list
             }
 
             // Dynamic respawning: Create new pallets and robots after deliveries (Phase 7)
@@ -307,11 +281,8 @@ public class WarehouseSimulator extends ColorSimFactory {
                 System.out.println(ex);
             }
 
-            // Get updated robot list for next iteration
-            robots = this.environment.getRobot();
-
             // Stop if no robots left
-            if (robots.isEmpty()) {
+            if (activeRobots.isEmpty()) {
                 System.out.println("\nAll robots have completed deliveries!");
                 break;
             }
