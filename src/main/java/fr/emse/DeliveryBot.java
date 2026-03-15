@@ -1,304 +1,260 @@
 package fr.emse;
 
 import java.awt.Color;
-import java.util.*;
+import java.util.List;
 
 import fr.emse.fayol.maqit.simulator.components.ColorInteractionRobot;
-import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.components.Message;
 import fr.emse.fayol.maqit.simulator.components.Orientation;
 import fr.emse.fayol.maqit.simulator.environment.ColorGridEnvironment;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
 /**
- * DeliveryBot - An autonomous warehouse robot that transports packages.
+ * DeliveryBot - Autonomous warehouse delivery robot using component-based architecture.
  *
- * This robot uses a four-stage journey approach:
- *   Stage 1: Navigate to package pickup location
- *   Stage 2: Travel through a waypoint (intermediate checkpoint)
- *   Stage 3: Deliver package to the designated delivery zone
- *   Stage 4: Exit the warehouse for cleanup
+ * This robot coordinates multiple specialized components to accomplish package delivery:
+ * - PathPlanner: Computes optimal routes using BFS
+ * - NavigationController: Executes movement along routes
+ * - CollisionManager: Handles obstacle avoidance
+ * - DeliveryMission: Manages the multi-phase delivery workflow
  *
- * Navigation Strategy: Uses BFS (Breadth-First Search) to find the shortest path,
- * with reactive collision avoidance when blocked by other robots or humans.
+ * Architecture Benefits:
+ * - Separation of concerns (pathfinding, navigation, collision detection)
+ * - Easier testing and maintenance
+ * - Reusable components for different robot types
  */
 public class DeliveryBot extends ColorInteractionRobot<ColorSimpleCell> {
 
-    // Robot journey stages - tracks where the robot is in its delivery process
-    public enum RobotRobotState {
-        GOING_TO_PACKAGE,      // Heading to pick up the package
-        GOING_TO_SAFEPOINT,    // Moving through intermediate waypoint
-        GOING_TO_DELIVERY,     // Transporting to delivery zone
-        GOING_TO_EXIT,         // Heading to exit after delivery
-        DONE                   // Journey complete, ready for removal
-    }
+    // Component subsystems
+    private final PathPlanner routePlanner;
+    private final NavigationController navigator;
+    private final CollisionManager collisionDetector;
+    private final DeliveryMission mission;
 
-    private RobotRobotState currentRobotState = RobotRobotState.GOING_TO_PACKAGE;
+    // Environment reference for component communication
+    private final ColorGridEnvironment warehouseEnvironment;
 
-    private final int[] packagePos;
-    private final int[] safepointPos;
-    private final int[] deliveryPos;
-    private final int[] exitPos;
-    private int[] currentTarget;
-
-    private List<int[]> path = new ArrayList<>();
-    private int pathIndex = 0;
-
-    private final ColorGridEnvironment env;
-    private final PackageItem assignedPackage;
-    private final int rows, cols;
-
-    private int stuckCounter = 0;
-
-    // ---- Right-panel separator constraints ----------------------------------
-    // Robots cannot cross these row boundaries while in cols >= RIGHT_PANEL_COL.
-    // Separator line is drawn BELOW each listed row, so movement between
-    // (sep, c) ↔ (sep+1, c) is forbidden when c >= RIGHT_PANEL_COL.
-    private static final int   RIGHT_PANEL_COL  = 18;
-    private static final int[] SEPARATOR_ROWS   = {2, 5, 8, 11};
-
+    /**
+     * Constructs a delivery robot with all necessary components initialized.
+     *
+     * @param name Robot identifier
+     * @param field Field of view size
+     * @param debug Debug level
+     * @param pos Starting position [row, col]
+     * @param color Robot display color
+     * @param rows Grid row count
+     * @param cols Grid column count
+     * @param env Warehouse environment
+     * @param packageItem Package to deliver
+     * @param packagePos Package pickup coordinates
+     * @param safepointPos Intermediate waypoint
+     * @param deliveryPos Final delivery zone
+     * @param exitPos Warehouse exit point
+     */
     public DeliveryBot(String name, int field, int debug, int[] pos, Color color,
-               int rows, int cols, ColorGridEnvironment env,
-               PackageItem packageItem, int[] packagePos, int[] safepointPos, int[] deliveryPos, int[] exitPos) {
+                       int rows, int cols, ColorGridEnvironment env,
+                       PackageItem packageItem, int[] packagePos,
+                       int[] safepointPos, int[] deliveryPos, int[] exitPos) {
+
         super(name, field, pos,
               new int[]{color.getRed(), color.getGreen(), color.getBlue()});
-        this.env              = env;
-        this.assignedPackage  = packageItem;
-        this.rows          = rows;
-        this.cols          = cols;
-        this.packagePos    = packagePos;
-        this.safepointPos  = safepointPos;
-        this.deliveryPos   = deliveryPos;
-        this.exitPos       = exitPos;
-        this.currentTarget = packagePos;
 
+        this.warehouseEnvironment = env;
+
+        // Initialize all component subsystems
+        this.routePlanner = new PathPlanner(env, rows, cols);
+        this.navigator = new NavigationController(this);
+        this.collisionDetector = new CollisionManager(env, rows, cols);
+        this.mission = new DeliveryMission(packageItem, packagePos,
+                                          safepointPos, deliveryPos, exitPos);
+
+        // Set initial orientation and compute first route
         setCurrentOrientation(Orientation.up);
-        computePath();
+        replanRoute();
     }
 
-    // -------------------------------------------------------------------------
-
+    /**
+     * Executes multiple movement steps.
+     *
+     * @param nb Number of steps to execute
+     */
     @Override
     public void move(int nb) {
-        for (int i = 0; i < nb; i++) step();
+        for (int i = 0; i < nb; i++) {
+            performSingleStep();
+        }
     }
 
-    // -------------------------------------------------------------------------
-
-    private void step() {
-        if (currentRobotState == RobotRobotState.DONE) return;
-
-        int[] loc = getLocation();
-
-        // Reached current waypoint — advance to next state
-        if (loc[0] == currentTarget[0] && loc[1] == currentTarget[1]) {
-            advanceRobotState();
+    /**
+     * Core control loop - executes one step of robot behavior.
+     *
+     * Decision flow:
+     * 1. Check if mission is complete -> stop
+     * 2. Check if reached current destination -> advance mission phase
+     * 3. Verify route exists -> replan if needed
+     * 4. Check for collisions -> wait or escape if blocked
+     * 5. Execute movement step -> replan if movement fails
+     */
+    private void performSingleStep() {
+        // Mission complete - no further action
+        if (mission.isComplete()) {
             return;
         }
 
-        if (path.isEmpty() || pathIndex >= path.size()) {
-            computePath();
-            if (path.isEmpty()) return;
+        int[] currentPosition = getLocation();
+
+        // Check if we've arrived at current phase destination
+        if (mission.hasReachedDestination(currentPosition)) {
+            handleDestinationReached();
+            return;
         }
 
-        int[] next = path.get(pathIndex);
-
-        // Reactive collision avoidance: wait if next cell is occupied by another robot
-        ColorSimpleCell[][] grid = (ColorSimpleCell[][]) env.getGrid();
-        ColorSimpleCell nextCell = grid[next[0]][next[1]];
-        boolean blocked = (nextCell != null
-                && nextCell.getContent() != null
-                && !(nextCell.getContent() instanceof ColorObstacle));
-        if (blocked) {
-            stuckCounter++;
-            if (stuckCounter >= 3) {
-                attemptEscape(loc, grid);
-                stuckCounter = 0;
+        // Ensure we have a valid route
+        if (!navigator.hasActiveRoute()) {
+            replanRoute();
+            if (!navigator.hasActiveRoute()) {
+                return; // No path available
             }
+        }
+
+        // Get next step in route
+        int[] nextWaypoint = navigator.getNextWaypoint();
+
+        // Check for collision before moving
+        if (collisionDetector.isCellBlocked(nextWaypoint[0], nextWaypoint[1])) {
+            handleBlockedPath();
             return;
         }
-        stuckCounter = 0;
 
-        Orientation required = directionOf(loc[0], loc[1], next[0], next[1]);
-        turnToFace(required);
+        // Path is clear - reset blockage tracking
+        collisionDetector.resetBlockageCounter();
 
-        boolean moved = moveForward();
-        if (moved) {
-            pathIndex++;
+        // Attempt movement
+        boolean movementSucceeded = navigator.executeMovementStep();
+
+        // Replan if movement failed (unexpected obstacle)
+        if (!movementSucceeded) {
+            replanRoute();
+        }
+    }
+
+    /**
+     * Handles arrival at current mission phase destination.
+     *
+     * Advances to next phase and computes new route.
+     */
+    private void handleDestinationReached() {
+        mission.advanceToNextPhase();
+        replanRoute();
+    }
+
+    /**
+     * Handles blocked movement attempts.
+     *
+     * Strategy:
+     * 1. Record blockage
+     * 2. If blocked repeatedly -> attempt escape maneuver
+     * 3. Otherwise -> wait for path to clear
+     */
+    private void handleBlockedPath() {
+        boolean shouldEscape = collisionDetector.recordBlockedAttempt();
+
+        if (shouldEscape) {
+            attemptEscapeManeuver();
+        }
+        // else: wait for blockage to clear
+    }
+
+    /**
+     * Attempts to escape from a blocked position.
+     *
+     * Finds an alternative cell perpendicular to the target direction,
+     * moves there, then replans the route.
+     */
+    private void attemptEscapeManeuver() {
+        int[] currentPos = getLocation();
+        int[] targetDest = mission.getCurrentDestination();
+
+        // Find an escape route
+        int[] escapeCell = collisionDetector.findEscapeRoute(currentPos, targetDest);
+
+        if (escapeCell != null) {
+            // Execute escape move
+            boolean escapedSuccessfully = navigator.moveToCell(escapeCell);
+
+            if (escapedSuccessfully) {
+                // Replan from new position
+                replanRoute();
+            }
         } else {
-            computePath();
+            // No escape available - replan to try different approach
+            replanRoute();
         }
     }
 
-    private void advanceRobotState() {
-        switch (currentRobotState) {
-            case GOING_TO_PACKAGE:
-                currentRobotState = RobotRobotState.GOING_TO_SAFEPOINT;
-                currentTarget = safepointPos;
-                computePath();
-                break;
-            case GOING_TO_SAFEPOINT:
-                currentRobotState = RobotRobotState.GOING_TO_DELIVERY;
-                currentTarget = deliveryPos;
-                computePath();
-                break;
-            case GOING_TO_DELIVERY:
-                currentRobotState = RobotRobotState.GOING_TO_EXIT;
-                currentTarget = exitPos;
-                computePath();
-                break;
-            case GOING_TO_EXIT:
-                currentRobotState = RobotRobotState.DONE;
-                break;
-            default:
-                break;
+    /**
+     * Computes a new route to the current mission destination.
+     *
+     * Uses PathPlanner to find optimal path and updates NavigationController.
+     */
+    private void replanRoute() {
+        int[] origin = getLocation();
+        int[] destination = mission.getCurrentDestination();
+
+        if (destination == null) {
+            return; // Mission complete - no destination
         }
-    }
 
-    private void computePath() {
-        path = bfs(getLocation(), currentTarget);
-        pathIndex = 0;
-    }
-
-    private void attemptEscape(int[] loc, ColorSimpleCell[][] grid) {
-        int dr = currentTarget[0] - loc[0];
-        int dc = currentTarget[1] - loc[1];
-        int[][] escapeDirs = (Math.abs(dc) >= Math.abs(dr))
-                ? new int[][]{{-1,0},{1,0},{0,-1},{0,1}}
-                : new int[][]{{0,-1},{0,1},{-1,0},{1,0}};
-
-        for (int[] d : escapeDirs) {
-            int nr = loc[0] + d[0], nc = loc[1] + d[1];
-            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-            if (isForbiddenTransition(loc[0], loc[1], nr, nc)) continue;
-            ColorSimpleCell cell = grid[nr][nc];
-            if (cell != null && cell.getContent() != null) continue;
-            turnToFace(directionOf(loc[0], loc[1], nr, nc));
-            if (moveForward()) {
-                computePath();
-                return;
-            }
-        }
-        computePath();
+        List<int[]> newRoute = routePlanner.findRoute(origin, destination);
+        navigator.setRoute(newRoute);
     }
 
     // -------------------------------------------------------------------------
-    // BFS
-    // -------------------------------------------------------------------------
-
-    private List<int[]> bfs(int[] start, int[] goal) {
-        boolean[][] visited = new boolean[rows][cols];
-        int[][][] prev = new int[rows][cols][2];
-        for (int[][] row : prev)
-            for (int[] cell : row)
-                Arrays.fill(cell, -1);
-
-        Queue<int[]> q = new LinkedList<>();
-        q.add(start);
-        visited[start[0]][start[1]] = true;
-
-        int[][] dirs = {{-1,0},{0,1},{1,0},{0,-1}};
-        ColorSimpleCell[][] grid = (ColorSimpleCell[][]) env.getGrid();
-
-        while (!q.isEmpty()) {
-            int[] cur = q.poll();
-            if (cur[0] == goal[0] && cur[1] == goal[1]) {
-                return reconstruct(prev, start, goal);
-            }
-            for (int[] d : dirs) {
-                int nr = cur[0] + d[0], nc = cur[1] + d[1];
-                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || visited[nr][nc]) continue;
-                if (isForbiddenTransition(cur[0], cur[1], nr, nc)) continue;
-                ColorSimpleCell cell = grid[nr][nc];
-                boolean isObstacle = (cell != null
-                        && cell.getContent() != null
-                        && cell.getContent() instanceof ColorObstacle
-                        && !(cell.getContent() instanceof ZoneMarker));
-                if (!isObstacle) {
-                    visited[nr][nc] = true;
-                    prev[nr][nc] = cur;
-                    q.add(new int[]{nr, nc});
-                }
-            }
-        }
-        return new ArrayList<>();
-    }
-
-    private List<int[]> reconstruct(int[][][] prev, int[] start, int[] goal) {
-        List<int[]> result = new ArrayList<>();
-        int[] cur = goal;
-        while (cur[0] != start[0] || cur[1] != start[1]) {
-            result.add(0, cur);
-            int[] p = prev[cur[0]][cur[1]];
-            if (p[0] == -1) break;
-            cur = p;
-        }
-        return result;
-    }
-
-    // -------------------------------------------------------------------------
-    // Right-panel wall enforcement
+    // Public API for external components
     // -------------------------------------------------------------------------
 
     /**
-     * Returns true if moving from (r1,c1) to (r2,c2) would cross a separator
-     * line in the right panel (cols >= 18).
-     * Only vertical moves (same column) are restricted; horizontal moves are free.
+     * Gets the current mission phase.
+     *
+     * @return Current delivery phase
      */
-    private boolean isForbiddenTransition(int r1, int c1, int r2, int c2) {
-        // Only applies in the right panel
-        if (Math.max(c1, c2) < RIGHT_PANEL_COL) return false;
-        // Only vertical movement can cross a separator line
-        if (c1 != c2) return false;
-        int minR = Math.min(r1, r2);
-        for (int sep : SEPARATOR_ROWS) {
-            if (minR == sep) return true; // line is below row sep → sep↔sep+1 blocked
-        }
-        return false;
+    public DeliveryMission.Phase getMissionPhase() {
+        return mission.getCurrentPhase();
+    }
+
+    /**
+     * Gets the package being delivered.
+     *
+     * @return Associated package item
+     */
+    public PackageItem getPackage() {
+        return mission.getPackage();
+    }
+
+    /**
+     * Checks if delivery mission is complete.
+     *
+     * @return true if all phases finished
+     */
+    public boolean isMissionComplete() {
+        return mission.isComplete();
+    }
+
+    /**
+     * Gets the full delivery mission object.
+     *
+     * @return The mission instance
+     */
+    public DeliveryMission getMission() {
+        return mission;
     }
 
     // -------------------------------------------------------------------------
-    // Orientation helpers
-    // -------------------------------------------------------------------------
-
-    private Orientation directionOf(int fromR, int fromC, int toR, int toC) {
-        if (toR < fromR) return Orientation.up;
-        if (toR > fromR) return Orientation.down;
-        if (toC > fromC) return Orientation.right;
-        return Orientation.left;
-    }
-
-    private void turnToFace(Orientation target) {
-        Orientation cur = getCurrentOrientation();
-        if (cur == null || cur == Orientation.unknown) {
-            setCurrentOrientation(Orientation.up);
-            cur = Orientation.up;
-        }
-        int leftTurns = (ccwIndex(target) - ccwIndex(cur) + 4) % 4;
-        for (int i = 0; i < leftTurns; i++) turnLeft();
-    }
-
-    private int ccwIndex(Orientation o) {
-        switch (o) {
-            case up:    return 0;
-            case left:  return 1;
-            case down:  return 2;
-            case right: return 3;
-            default:    return 0;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Accessors
-    // -------------------------------------------------------------------------
-
-    public RobotRobotState  getRobotState()  { return currentRobotState; }
-    public PackageItem getPackage() { return assignedPackage; }
-
+    // Message handling (not used in current implementation)
     // -------------------------------------------------------------------------
 
     @Override
     public void handleMessage(Message msg) {
-        // No inter-robot communication
+        // Future enhancement: implement inter-robot communication
     }
 }

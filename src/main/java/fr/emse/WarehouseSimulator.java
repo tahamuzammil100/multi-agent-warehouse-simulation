@@ -119,19 +119,49 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
             this.sp.colorobstacle.getBlue()
         };
 
-        int[][] positions = {
-            {0,  5},                                                                                                                                                                           
-            {2, 11}, {2, 14},                                                                                                                                                                  
-            {5,  2}, {5,  6},                                                                                                                                                                  
-            {6, 15},                                                                                                                                                                           
-            {7,  1},                                                                                                                                                                           
-            {8,  7},                                                                                                                                                                           
-            {9,  4},                                                                                                                                                                           
-            {11, 10},                                                                                                                                                                          
-            {13,  7}, {13, 16}                                                                                                                                                                 
-        }; 
+        // Read obstacle positions from configuration file
+        List<int[]> positions = new ArrayList<>();
+        try {
+            Ini ini = new Ini(new File("configuration.ini"));
 
-        for (int[] pos : positions) addNewComponent(new ColorObstacle(pos, rgb));
+            // Read all obstacles (obstacle1, obstacle2, ... obstacle10)
+            for (int i = 1; i <= 10; i++) {
+                String obstacleKey = "obstacle" + i;
+                String obstacleValue = ini.get("obstacles", obstacleKey);
+
+                if (obstacleValue != null && !obstacleValue.trim().isEmpty()) {
+                    String[] coords = obstacleValue.trim().split(",");
+                    if (coords.length == 2) {
+                        int row = Integer.parseInt(coords[0].trim());
+                        int col = Integer.parseInt(coords[1].trim());
+                        positions.add(new int[]{row, col});
+                    }
+                }
+            }
+
+            System.out.println("Loaded " + positions.size() + " obstacles from configuration");
+
+        } catch (Exception e) {
+            System.err.println("Error reading obstacle positions from config: " + e.getMessage());
+            System.err.println("Using default obstacle positions as fallback");
+
+            // Fallback to default positions if config read fails
+            positions.add(new int[]{1, 8});
+            positions.add(new int[]{3, 12});
+            positions.add(new int[]{4, 5});
+            positions.add(new int[]{6, 16});
+            positions.add(new int[]{7, 3});
+            positions.add(new int[]{8, 9});
+            positions.add(new int[]{10, 6});
+            positions.add(new int[]{11, 14});
+            positions.add(new int[]{12, 2});
+            positions.add(new int[]{13, 11});
+        }
+
+        // Create obstacle components at each position
+        for (int[] pos : positions) {
+            addNewComponent(new ColorObstacle(pos, rgb));
+        }
     }
 
     @Override
@@ -223,7 +253,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
             // 4. Move active delivery robots and handle state transitions
             List<DeliveryBot> toRemove = new ArrayList<>();
             for (DeliveryBot robot : activeRobots) {
-                DeliveryBot.RobotRobotState before = robot.getRobotState();
+                DeliveryMission.Phase before = robot.getMissionPhase();
                 int[] oldPos = robot.getLocation();
 
                 robot.updatePerception(
@@ -234,17 +264,17 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                 if (newPos[0] != oldPos[0] || newPos[1] != oldPos[1])
                     updateEnvironment(oldPos, newPos, robot.getId());
 
-                DeliveryBot.RobotRobotState after = robot.getRobotState();
+                DeliveryMission.Phase after = robot.getMissionPhase();
 
-                if (before == DeliveryBot.RobotRobotState.GOING_TO_PACKAGE
-                        && after == DeliveryBot.RobotRobotState.GOING_TO_SAFEPOINT) {
+                if (before == DeliveryMission.Phase.PICKUP
+                        && after == DeliveryMission.Phase.CHECKPOINT) {
                     packageOverlay.remove(key(robot.getPackage().arrivalPosition));
                     System.out.println("  [PICKED UP] " + robot.getPackage()
                             + " by Robot#" + robot.getId());
                 }
 
-                if (before == DeliveryBot.RobotRobotState.GOING_TO_DELIVERY
-                        && after == DeliveryBot.RobotRobotState.GOING_TO_EXIT) {
+                if (before == DeliveryMission.Phase.DROPOFF
+                        && after == DeliveryMission.Phase.EXIT) {
                     int tp = step - robot.getPackage().spawnStep;
                     totalDeliveryTime += tp;
                     deliveredCount++;
@@ -255,7 +285,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                             robot.getPackage(), robot.getId(), tp);
                 }
 
-                if (after == DeliveryBot.RobotRobotState.DONE) {
+                if (after == DeliveryMission.Phase.COMPLETED) {
                     clearCell(robot.getLocation());
                     toRemove.add(robot);
                     System.out.println("  [EXITED]   Robot#" + robot.getId());
