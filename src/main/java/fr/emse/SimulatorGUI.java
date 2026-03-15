@@ -78,6 +78,9 @@ public class SimulatorGUI {
     private JPanel  panel;
     private JPanel  statsPanel;
     private BufferedImage humanImage;
+    private BufferedImage obstacleImage;
+    private BufferedImage packageImage;
+    private BufferedImage robotImage;
 
     private static final Color BG        = new Color(245, 245, 245);
     private static final Color GRID_LINE = new Color(210, 210, 210);
@@ -113,24 +116,80 @@ public class SimulatorGUI {
         this.padding    = padding;
         this.showGrid    = showGrid;
         loadHumanImage();
+        loadObstacleImage();
+        loadPackageImage();
+        loadRobotImage();
     }
 
     private void loadHumanImage() {
-        String[] candidates = {
-            "assets/human_icon.png", "assets/human_icon.jpg",
-            "assets/human.png",      "assets/human.jpg"
-        };
-        for (String name : candidates) {
-            File f = new File(name);
+        try {
+            // Try loading from resources first
+            File f = new File("src/main/resources/people.png");
             if (f.exists()) {
-                try {
+                humanImage = ImageIO.read(f);
+                System.out.println("[Display] People image loaded: " + f.getAbsolutePath());
+                return;
+            }
+
+            // Fallback to old assets paths
+            String[] candidates = {
+                "assets/human_icon.png", "assets/human_icon.jpg",
+                "assets/human.png",      "assets/human.jpg"
+            };
+            for (String name : candidates) {
+                f = new File(name);
+                if (f.exists()) {
                     humanImage = ImageIO.read(f);
                     System.out.println("[Display] Human icon loaded: " + f.getAbsolutePath());
                     return;
-                } catch (IOException ignored) {}
+                }
             }
+        } catch (IOException e) {
+            System.out.println("[Display] Failed to load people image: " + e.getMessage());
         }
-        System.out.println("[Display] No icon found in assets/ — using default circle.");
+        System.out.println("[Display] No people icon found — using default circle.");
+    }
+
+    private void loadObstacleImage() {
+        try {
+            File f = new File("src/main/resources/obstacle.png");
+            if (f.exists()) {
+                obstacleImage = ImageIO.read(f);
+                System.out.println("[Display] Obstacle image loaded: " + f.getAbsolutePath());
+            } else {
+                System.out.println("[Display] Obstacle image not found at: " + f.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.out.println("[Display] Failed to load obstacle image: " + e.getMessage());
+        }
+    }
+
+    private void loadPackageImage() {
+        try {
+            File f = new File("src/main/resources/package.png");
+            if (f.exists()) {
+                packageImage = ImageIO.read(f);
+                System.out.println("[Display] Package image loaded: " + f.getAbsolutePath());
+            } else {
+                System.out.println("[Display] Package image not found at: " + f.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.out.println("[Display] Failed to load package image: " + e.getMessage());
+        }
+    }
+
+    private void loadRobotImage() {
+        try {
+            File f = new File("src/main/resources/robot.png");
+            if (f.exists()) {
+                robotImage = ImageIO.read(f);
+                System.out.println("[Display] Robot image loaded: " + f.getAbsolutePath());
+            } else {
+                System.out.println("[Display] Robot image not found at: " + f.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.out.println("[Display] Failed to load robot image: " + e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -357,13 +416,20 @@ public class SimulatorGUI {
                 Color pkgColor = overlay.get(r + "," + c);
                 if (pkgColor == null) continue;
                 int px = c * cellSize, py = r * cellSize;
-                int m = cellSize / 4;
-                g.setColor(pkgColor);
-                g.fillRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
-                g.setColor(pkgColor.darker());
-                g.setStroke(new BasicStroke(2));
-                g.drawRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
-                g.setStroke(new BasicStroke(1));
+
+                if (packageImage != null) {
+                    // Draw package image scaled to cell size
+                    g.drawImage(packageImage, px, py, cellSize, cellSize, null);
+                } else {
+                    // Fallback: draw as colored rectangle if image not loaded
+                    int m = cellSize / 4;
+                    g.setColor(pkgColor);
+                    g.fillRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
+                    g.setColor(pkgColor.darker());
+                    g.setStroke(new BasicStroke(2));
+                    g.drawRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
+                    g.setStroke(new BasicStroke(1));
+                }
             }
         }
 
@@ -436,13 +502,12 @@ public class SimulatorGUI {
     }
 
     private void drawHuman(Graphics2D g, int px, int py) {
-        int m = cellSize / 8;
         if (humanImage != null) {
-            g.drawImage(humanImage,
-                        px + m, py + m,
-                        cellSize - 2 * m, cellSize - 2 * m,
-                        null);
+            // Draw people image scaled to cell size (same as obstacle)
+            g.drawImage(humanImage, px, py, cellSize, cellSize, null);
         } else {
+            // Fallback: draw as circle if image not loaded
+            int m = cellSize / 8;
             g.setColor(new Color(200, 160, 100));
             g.fillOval(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
             g.setColor(Color.DARK_GRAY);
@@ -451,22 +516,34 @@ public class SimulatorGUI {
     }
 
     private void drawRobot(Graphics2D g, int px, int py, DeliveryBot robot) {
-        int[] rgb = robot.getColor();
-        int m = cellSize / 3;
-        g.setColor(new Color(rgb[0], rgb[1], rgb[2]));
-        g.fillRoundRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m, 6, 6);
-        g.setColor(Color.DARK_GRAY);
-        g.drawRoundRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m, 6, 6);
+        if (robotImage != null) {
+            // Draw robot image scaled to cell size
+            g.drawImage(robotImage, px, py, cellSize, cellSize, null);
+        } else {
+            // Fallback: draw as rounded rectangle if image not loaded
+            int[] rgb = robot.getColor();
+            int m = cellSize / 3;
+            g.setColor(new Color(rgb[0], rgb[1], rgb[2]));
+            g.fillRoundRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m, 6, 6);
+            g.setColor(Color.DARK_GRAY);
+            g.drawRoundRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m, 6, 6);
+        }
     }
 
     private void drawObstacle(Graphics2D g, int px, int py, ColorObstacle obs) {
-        int[] rgb = obs.getColor();
-        int m = 3;
-        g.setColor(new Color(rgb[0], rgb[1], rgb[2]));
-        g.fillRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
-        g.setColor(Color.BLACK);
-        g.setStroke(new BasicStroke(lineStroke));
-        g.drawRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
-        g.setStroke(new BasicStroke(1));
+        if (obstacleImage != null) {
+            // Draw obstacle image scaled to cell size
+            g.drawImage(obstacleImage, px, py, cellSize, cellSize, null);
+        } else {
+            // Fallback: draw as rectangle if image not loaded
+            int[] rgb = obs.getColor();
+            int m = 3;
+            g.setColor(new Color(rgb[0], rgb[1], rgb[2]));
+            g.fillRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
+            g.setColor(Color.BLACK);
+            g.setStroke(new BasicStroke(lineStroke));
+            g.drawRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m);
+            g.setStroke(new BasicStroke(1));
+        }
     }
 }
