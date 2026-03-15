@@ -365,7 +365,7 @@ public class WarehouseDisplay {
                 ColorSimpleCell cell = grid[r][c];
                 if (cell == null || cell.getContent() == null) continue;
                 Object content = cell.getContent();
-                if      (content instanceof HumanAgent)    drawHuman   (g, px, py);
+                if      (content instanceof WarehouseWorker) drawHuman   (g, px, py);
                 else if (content instanceof DeliveryBot)   drawRobot   (g, px, py, (DeliveryBot) content);
                 else if (content instanceof ColorObstacle) drawObstacle(g, px, py, (ColorObstacle) content);
             }

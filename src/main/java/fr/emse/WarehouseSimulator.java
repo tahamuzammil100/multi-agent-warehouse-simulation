@@ -75,8 +75,8 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
     /** Currently active robots (spawned on demand). */
     private final List<DeliveryBot> activeRobots = new ArrayList<>();
 
-    /** Human agents. */
-    private final List<HumanAgent> humans = new ArrayList<>();
+    /** Warehouse workers (human agents moving through the warehouse). */
+    private final List<WarehouseWorker> workers = new ArrayList<>();
 
     /** Package display overlay: "row,col" → colour. Updated each step. */
     private final Map<String, Color> packageOverlay = new ConcurrentHashMap<>();
@@ -150,17 +150,17 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
         upcomingPackages.clear();
         upcomingPackages.addAll(sorted);
 
-        // Create human agents
-        int[][] humanPositions = {{4,8},{7,4},{8,11},{8,17},{11,8},{13,13}};
-        Color humanColor = new Color(200, 160, 100);
-        for (int i = 0; i < humanPositions.length; i++) {
-            HumanAgent h = new HumanAgent(
-                "Human" + i, this.sp.field, humanPositions[i],
-                humanColor, this.sp.rows, this.sp.columns,
+        // Create warehouse workers (human agents)
+        int[][] workerPositions = {{4,8},{7,4},{8,11},{8,17},{11,8},{13,13}};
+        Color workerColor = new Color(200, 160, 100);
+        for (int i = 0; i < workerPositions.length; i++) {
+            WarehouseWorker worker = new WarehouseWorker(
+                "Worker" + i, this.sp.field, workerPositions[i],
+                workerColor, this.sp.rows, this.sp.columns,
                 this.environment, (long) this.sp.seed + i + 1
             );
-            addNewComponent(h);
-            humans.add(h);
+            addNewComponent(worker);
+            workers.add(worker);
         }
     }
 
@@ -210,14 +210,14 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                 }
             }
 
-            // 3. Move humans
-            for (HumanAgent h : humans) {
-                int[] hOld = h.getLocation();
-                h.updatePerception(this.environment.getNeighbor(h.getX(), h.getY(), h.getField()));
-                h.move(1);
-                int[] hNew = h.getLocation();
-                if (hNew[0] != hOld[0] || hNew[1] != hOld[1])
-                    updateEnvironment(hOld, hNew, h.getId());
+            // 3. Move warehouse workers
+            for (WarehouseWorker worker : workers) {
+                int[] oldPos = worker.getLocation();
+                worker.updatePerception(this.environment.getNeighbor(worker.getX(), worker.getY(), worker.getField()));
+                worker.move(1);
+                int[] newPos = worker.getLocation();
+                if (newPos[0] != oldPos[0] || newPos[1] != oldPos[1])
+                    updateEnvironment(oldPos, newPos, worker.getId());
             }
 
             // 4. Move active delivery robots and handle state transitions
