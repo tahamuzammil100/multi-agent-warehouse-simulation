@@ -61,19 +61,19 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     protected WarehouseDisplay warehouseDisplay;
 
-    private final int totalPallets;
+    private final int totalPackageCount;
     private final float lineStroke;
     private final int padding;
     private final boolean showGrid;
 
     /** All packages pre-generated, sorted by arrival step. */
-    private final Queue<Pallet> upcomingPackages = new LinkedList<>();
+    private final Queue<PackageItem> upcomingPackages = new LinkedList<>();
 
     /** Packages that have arrived but not yet assigned a robot. */
-    private final List<Pallet> waitingPackages = new ArrayList<>();
+    private final List<PackageItem> waitingPackages = new ArrayList<>();
 
     /** Currently active robots (spawned on demand). */
-    private final List<AMR> activeAmrs = new ArrayList<>();
+    private final List<DeliveryBot> activeRobots = new ArrayList<>();
 
     /** Human agents. */
     private final List<HumanAgent> humans = new ArrayList<>();
@@ -83,7 +83,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     private long totalDeliveryTime = 0;
     private int  deliveredCount    = 0;
-    private int  nextAmrId         = 0;
+    private int  nextRobotId       = 0;
 
     /**
      * Completed deliveries: each entry is int[]{palletId, zone, deliverySteps}.
@@ -95,9 +95,9 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     // ---- Constructor ---------------------------------------------------------
 
-    public WarehouseSimulator(SimProperties sp, int totalPallets, float lineStroke, int padding, boolean showGrid) {
+    public WarehouseSimulator(SimProperties sp, int totalPackages, float lineStroke, int padding, boolean showGrid) {
         super(sp);
-        this.totalPallets = totalPallets;
+        this.totalPackageCount = totalPackages;
         this.lineStroke   = lineStroke;
         this.padding      = padding;
         this.showGrid     = showGrid;
@@ -138,15 +138,15 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
     public void createRobot() {
         // Pre-generate all packages; spread arrivals randomly across first half of simulation
         int spreadSteps = Math.max(1, Math.min(this.sp.step / 2, 200));
-        for (int i = 0; i < totalPallets; i++) {
+        for (int i = 0; i < totalPackageCount; i++) {
             int[] entryCell  = PACKAGE_ENTRIES[random.nextInt(PACKAGE_ENTRIES.length)].clone();
             int deliveryZone = random.nextInt(2) + 1;
             int arrivalStep  = random.nextInt(spreadSteps);
-            upcomingPackages.add(new Pallet(i, entryCell, deliveryZone, arrivalStep));
+            upcomingPackages.add(new PackageItem(i, entryCell, deliveryZone, arrivalStep));
         }
         // Sort by arrival step
-        List<Pallet> sorted = new ArrayList<>(upcomingPackages);
-        sorted.sort(Comparator.comparingInt(p -> p.arrivalStep));
+        List<PackageItem> sorted = new ArrayList<>(upcomingPackages);
+        sorted.sort(Comparator.comparingInt(p -> p.spawnStep));
         upcomingPackages.clear();
         upcomingPackages.addAll(sorted);
 
@@ -185,25 +185,25 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
     @Override
     public void schedule() {
         System.out.println("=== Warehouse Simulation Start ===");
-        System.out.println("Total packages: " + totalPallets);
+        System.out.println("Total packages: " + totalPackageCount);
 
         for (int step = 0; step < this.sp.step; step++) {
             System.out.printf("Step %d | Delivered: %d/%d | Active: %d | Waiting: %d%n",
-                    step, deliveredCount, totalPallets,
-                    activeAmrs.size(), waitingPackages.size());
+                    step, deliveredCount, totalPackageCount,
+                    activeRobots.size(), waitingPackages.size());
 
             // 1. Release packages arriving at this step
             while (!upcomingPackages.isEmpty()
-                    && upcomingPackages.peek().arrivalStep <= step) {
-                Pallet pkg = upcomingPackages.poll();
+                    && upcomingPackages.peek().spawnStep <= step) {
+                PackageItem pkg = upcomingPackages.poll();
                 waitingPackages.add(pkg);
-                packageOverlay.put(key(pkg.entryCell), pkg.packageColor);
+                packageOverlay.put(key(pkg.arrivalPosition), pkg.displayColor);
                 System.out.println("  [ARRIVED]  " + pkg);
             }
 
             // 2. Try to spawn a robot for each waiting package (if entry cell is free)
-            for (Pallet pkg : new ArrayList<>(waitingPackages)) {
-                int[] robotEntry = (pkg.deliveryZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
+            for (PackageItem pkg : new ArrayList<>(waitingPackages)) {
+                int[] robotEntry = (pkg.targetZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
                 if (isCellFree(robotEntry)) {
                     spawnRobot(pkg);
                     waitingPackages.remove(pkg);
@@ -220,62 +220,62 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                     updateEnvironment(hOld, hNew, h.getId());
             }
 
-            // 4. Move active AMRs and handle state transitions
-            List<AMR> toRemove = new ArrayList<>();
-            for (AMR amr : activeAmrs) {
-                AMR.State before = amr.getState();
-                int[] oldPos = amr.getLocation();
+            // 4. Move active delivery robots and handle state transitions
+            List<DeliveryBot> toRemove = new ArrayList<>();
+            for (DeliveryBot robot : activeRobots) {
+                DeliveryBot.RobotRobotState before = robot.getRobotState();
+                int[] oldPos = robot.getLocation();
 
-                amr.updatePerception(
-                        this.environment.getNeighbor(amr.getX(), amr.getY(), amr.getField()));
-                amr.move(1);
+                robot.updatePerception(
+                        this.environment.getNeighbor(robot.getX(), robot.getY(), robot.getField()));
+                robot.move(1);
 
-                int[] newPos = amr.getLocation();
+                int[] newPos = robot.getLocation();
                 if (newPos[0] != oldPos[0] || newPos[1] != oldPos[1])
-                    updateEnvironment(oldPos, newPos, amr.getId());
+                    updateEnvironment(oldPos, newPos, robot.getId());
 
-                AMR.State after = amr.getState();
+                DeliveryBot.RobotRobotState after = robot.getRobotState();
 
-                if (before == AMR.State.GOING_TO_PACKAGE
-                        && after == AMR.State.GOING_TO_SAFEPOINT) {
-                    packageOverlay.remove(key(amr.getPallet().entryCell));
-                    System.out.println("  [PICKED UP] " + amr.getPallet()
-                            + " by AMR#" + amr.getId());
+                if (before == DeliveryBot.RobotRobotState.GOING_TO_PACKAGE
+                        && after == DeliveryBot.RobotRobotState.GOING_TO_SAFEPOINT) {
+                    packageOverlay.remove(key(robot.getPackage().arrivalPosition));
+                    System.out.println("  [PICKED UP] " + robot.getPackage()
+                            + " by Robot#" + robot.getId());
                 }
 
-                if (before == AMR.State.GOING_TO_DELIVERY
-                        && after == AMR.State.GOING_TO_EXIT) {
-                    int tp = step - amr.getPallet().arrivalStep;
+                if (before == DeliveryBot.RobotRobotState.GOING_TO_DELIVERY
+                        && after == DeliveryBot.RobotRobotState.GOING_TO_EXIT) {
+                    int tp = step - robot.getPackage().spawnStep;
                     totalDeliveryTime += tp;
                     deliveredCount++;
                     deliveredRecords.add(new int[]{
-                        amr.getPallet().id, amr.getPallet().deliveryZone, tp
+                        robot.getPackage().packageId, robot.getPackage().targetZone, tp
                     });
-                    System.out.printf("  [DELIVERED] %s by AMR#%d in %d steps%n",
-                            amr.getPallet(), amr.getId(), tp);
+                    System.out.printf("  [DELIVERED] %s by Robot#%d in %d steps%n",
+                            robot.getPackage(), robot.getId(), tp);
                 }
 
-                if (after == AMR.State.DONE) {
-                    clearCell(amr.getLocation());
-                    toRemove.add(amr);
-                    System.out.println("  [EXITED]   AMR#" + amr.getId());
+                if (after == DeliveryBot.RobotRobotState.DONE) {
+                    clearCell(robot.getLocation());
+                    toRemove.add(robot);
+                    System.out.println("  [EXITED]   Robot#" + robot.getId());
                 }
             }
-            activeAmrs.removeAll(toRemove);
+            activeRobots.removeAll(toRemove);
 
             // 5. Refresh display
             warehouseDisplay.setPackageOverlay(packageOverlay);
 
-            // Build active-robot stats: {palletId, zone, stepsInTransit}
+            // Build active-robot stats: {packageId, zone, stepsInTransit}
             List<int[]> activeStats = new ArrayList<>();
-            for (AMR amr : activeAmrs) {
+            for (DeliveryBot robot : activeRobots) {
                 activeStats.add(new int[]{
-                    amr.getPallet().id,
-                    amr.getPallet().deliveryZone,
-                    step - amr.getPallet().arrivalStep
+                    robot.getPackage().packageId,
+                    robot.getPackage().targetZone,
+                    step - robot.getPackage().spawnStep
                 });
             }
-            warehouseDisplay.updateStats(step, deliveredCount, totalPallets,
+            warehouseDisplay.updateStats(step, deliveredCount, totalPackageCount,
                                          totalDeliveryTime, activeStats, deliveredRecords);
 
             refreshGW();
@@ -286,8 +286,8 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                 System.out.println(e);
             }
 
-            if (deliveredCount >= totalPallets
-                    && activeAmrs.isEmpty()
+            if (deliveredCount >= totalPackageCount
+                    && activeRobots.isEmpty()
                     && waitingPackages.isEmpty()) break;
         }
 
@@ -338,28 +338,28 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     // ---- Helpers -------------------------------------------------------------
 
-    private void spawnRobot(Pallet pkg) {
-        int[] robotEntry    = (pkg.deliveryZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
-        int[] safepointPos  = (pkg.deliveryZone == 1) ? SAFEPOINT_1   : SAFEPOINT_2;
-        int[] deliveryPos   = (pkg.deliveryZone == 1) ? DELIVERY_1    : DELIVERY_2;
-        int[] exitPos       = (pkg.deliveryZone == 1) ? EXIT_1        : EXIT_2;
+    private void spawnRobot(PackageItem pkg) {
+        int[] robotEntry    = (pkg.targetZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
+        int[] safepointPos  = (pkg.targetZone == 1) ? SAFEPOINT_1   : SAFEPOINT_2;
+        int[] deliveryPos   = (pkg.targetZone == 1) ? DELIVERY_1    : DELIVERY_2;
+        int[] exitPos       = (pkg.targetZone == 1) ? EXIT_1        : EXIT_2;
 
-        AMR amr = new AMR(
-            "AMR" + nextAmrId++,
+        DeliveryBot robot = new DeliveryBot(
+            "Robot" + nextRobotId++,
             this.sp.field, this.sp.debug,
             robotEntry,
             this.sp.colorrobot,
             this.sp.rows, this.sp.columns,
             this.environment,
             pkg,
-            pkg.entryCell,
+            pkg.arrivalPosition,
             safepointPos,
             deliveryPos,
             exitPos
         );
-        addNewComponent(amr);
-        activeAmrs.add(amr);
-        System.out.println("  [SPAWNED]  AMR#" + amr.getId() + " for " + pkg);
+        addNewComponent(robot);
+        activeRobots.add(robot);
+        System.out.println("  [SPAWNED]  Robot#" + robot.getId() + " for " + pkg);
     }
 
     private boolean isCellFree(int[] pos) {
@@ -390,7 +390,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     private void printResults() {
         System.out.println("\n=== RESULTS ===");
-        System.out.println("Delivered: " + deliveredCount + "/" + totalPallets);
+        System.out.println("Delivered: " + deliveredCount + "/" + totalPackageCount);
         System.out.println("Total delivery time:   " + totalDeliveryTime + " steps");
         System.out.printf ("Average delivery time: %.1f steps/package%n",
                 deliveredCount > 0 ? (double) totalDeliveryTime / deliveredCount : 0.0);
@@ -405,17 +405,17 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
         sp.displayParams();
 
         Ini ini = new Ini(new File("configuration.ini"));
-        int     totalPallets = Integer.parseInt(ini.get("warehouse", "total_pallets").trim());
-        float   lineStroke   = Float.parseFloat(ini.get("warehouse", "line_stroke").trim());
-        int     padding      = Integer.parseInt(ini.get("warehouse", "padding").trim());
-        boolean showGrid     = Integer.parseInt(ini.get("warehouse", "show_grid").trim()) != 0;
+        int     totalPackages = Integer.parseInt(ini.get("warehouse", "total_pallets").trim());
+        float   lineStroke    = Float.parseFloat(ini.get("warehouse", "line_stroke").trim());
+        int     padding       = Integer.parseInt(ini.get("warehouse", "padding").trim());
+        boolean showGrid      = Integer.parseInt(ini.get("warehouse", "show_grid").trim()) != 0;
 
         System.out.println("=== Configuration ===");
         System.out.println("Grid:           " + sp.rows + " x " + sp.columns);
-        System.out.println("Total packages: " + totalPallets);
+        System.out.println("Total packages: " + totalPackages);
         System.out.println("Line stroke:    " + lineStroke + "px");
 
-        WarehouseSimulator sim = new WarehouseSimulator(sp, totalPallets, lineStroke, padding, showGrid);
+        WarehouseSimulator sim = new WarehouseSimulator(sp, totalPackages, lineStroke, padding, showGrid);
         sim.createEnvironment();
         sim.createObstacle();
         sim.createRobot();

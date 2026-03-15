@@ -11,21 +11,29 @@ import fr.emse.fayol.maqit.simulator.environment.ColorGridEnvironment;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
 /**
- * Autonomous Mobile Robot (AMR).
+ * DeliveryBot - An autonomous warehouse robot that transports packages.
  *
- * Three-waypoint state machine:
- *   GOING_TO_PACKAGE  → navigate to package entry cell (pick up)
- *   GOING_TO_DELIVERY → navigate to delivery point inside the oval zone (drop off)
- *   GOING_TO_EXIT     → navigate to exit cell (left column, col 0)
- *   DONE              → reached exit; simulator removes robot from grid
+ * This robot uses a four-stage journey approach:
+ *   Stage 1: Navigate to package pickup location
+ *   Stage 2: Travel through a waypoint (intermediate checkpoint)
+ *   Stage 3: Deliver package to the designated delivery zone
+ *   Stage 4: Exit the warehouse for cleanup
  *
- * Navigation: BFS shortest path, reactive collision avoidance.
+ * Navigation Strategy: Uses BFS (Breadth-First Search) to find the shortest path,
+ * with reactive collision avoidance when blocked by other robots or humans.
  */
-public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
+public class DeliveryBot extends ColorInteractionRobot<ColorSimpleCell> {
 
-    public enum State { GOING_TO_PACKAGE, GOING_TO_SAFEPOINT, GOING_TO_DELIVERY, GOING_TO_EXIT, DONE }
+    // Robot journey stages - tracks where the robot is in its delivery process
+    public enum RobotRobotState {
+        GOING_TO_PACKAGE,      // Heading to pick up the package
+        GOING_TO_SAFEPOINT,    // Moving through intermediate waypoint
+        GOING_TO_DELIVERY,     // Transporting to delivery zone
+        GOING_TO_EXIT,         // Heading to exit after delivery
+        DONE                   // Journey complete, ready for removal
+    }
 
-    private State state = State.GOING_TO_PACKAGE;
+    private RobotRobotState currentRobotState = RobotRobotState.GOING_TO_PACKAGE;
 
     private final int[] packagePos;
     private final int[] safepointPos;
@@ -37,7 +45,7 @@ public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
     private int pathIndex = 0;
 
     private final ColorGridEnvironment env;
-    private final Pallet pallet;
+    private final PackageItem assignedPackage;
     private final int rows, cols;
 
     private int stuckCounter = 0;
@@ -49,13 +57,13 @@ public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
     private static final int   RIGHT_PANEL_COL  = 18;
     private static final int[] SEPARATOR_ROWS   = {2, 5, 8, 11};
 
-    public AMR(String name, int field, int debug, int[] pos, Color color,
+    public DeliveryBot(String name, int field, int debug, int[] pos, Color color,
                int rows, int cols, ColorGridEnvironment env,
-               Pallet pallet, int[] packagePos, int[] safepointPos, int[] deliveryPos, int[] exitPos) {
+               PackageItem packageItem, int[] packagePos, int[] safepointPos, int[] deliveryPos, int[] exitPos) {
         super(name, field, pos,
               new int[]{color.getRed(), color.getGreen(), color.getBlue()});
-        this.env           = env;
-        this.pallet        = pallet;
+        this.env              = env;
+        this.assignedPackage  = packageItem;
         this.rows          = rows;
         this.cols          = cols;
         this.packagePos    = packagePos;
@@ -78,13 +86,13 @@ public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
     // -------------------------------------------------------------------------
 
     private void step() {
-        if (state == State.DONE) return;
+        if (currentRobotState == RobotRobotState.DONE) return;
 
         int[] loc = getLocation();
 
         // Reached current waypoint — advance to next state
         if (loc[0] == currentTarget[0] && loc[1] == currentTarget[1]) {
-            advanceState();
+            advanceRobotState();
             return;
         }
 
@@ -122,25 +130,25 @@ public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
         }
     }
 
-    private void advanceState() {
-        switch (state) {
+    private void advanceRobotState() {
+        switch (currentRobotState) {
             case GOING_TO_PACKAGE:
-                state = State.GOING_TO_SAFEPOINT;
+                currentRobotState = RobotRobotState.GOING_TO_SAFEPOINT;
                 currentTarget = safepointPos;
                 computePath();
                 break;
             case GOING_TO_SAFEPOINT:
-                state = State.GOING_TO_DELIVERY;
+                currentRobotState = RobotRobotState.GOING_TO_DELIVERY;
                 currentTarget = deliveryPos;
                 computePath();
                 break;
             case GOING_TO_DELIVERY:
-                state = State.GOING_TO_EXIT;
+                currentRobotState = RobotRobotState.GOING_TO_EXIT;
                 currentTarget = exitPos;
                 computePath();
                 break;
             case GOING_TO_EXIT:
-                state = State.DONE;
+                currentRobotState = RobotRobotState.DONE;
                 break;
             default:
                 break;
@@ -284,8 +292,8 @@ public class AMR extends ColorInteractionRobot<ColorSimpleCell> {
     // Accessors
     // -------------------------------------------------------------------------
 
-    public State  getState()  { return state; }
-    public Pallet getPallet() { return pallet; }
+    public RobotRobotState  getRobotState()  { return currentRobotState; }
+    public PackageItem getPackage() { return assignedPackage; }
 
     // -------------------------------------------------------------------------
 

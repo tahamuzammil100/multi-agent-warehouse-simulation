@@ -366,7 +366,7 @@ public class WarehouseDisplay {
                 if (cell == null || cell.getContent() == null) continue;
                 Object content = cell.getContent();
                 if      (content instanceof HumanAgent)    drawHuman   (g, px, py);
-                else if (content instanceof AMR)           drawRobot   (g, px, py, (AMR) content);
+                else if (content instanceof DeliveryBot)   drawRobot   (g, px, py, (DeliveryBot) content);
                 else if (content instanceof ColorObstacle) drawObstacle(g, px, py, (ColorObstacle) content);
             }
         }
@@ -441,8 +441,8 @@ public class WarehouseDisplay {
         }
     }
 
-    private void drawRobot(Graphics2D g, int px, int py, AMR amr) {
-        int[] rgb = amr.getColor();
+    private void drawRobot(Graphics2D g, int px, int py, DeliveryBot robot) {
+        int[] rgb = robot.getColor();
         int m = cellSize / 3;
         g.setColor(new Color(rgb[0], rgb[1], rgb[2]));
         g.fillRoundRect(px + m, py + m, cellSize - 2 * m, cellSize - 2 * m, 6, 6);
