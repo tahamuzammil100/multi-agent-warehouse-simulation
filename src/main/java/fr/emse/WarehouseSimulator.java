@@ -59,7 +59,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
 
     // ---- Fields --------------------------------------------------------------
 
-    protected WarehouseDisplay warehouseDisplay;
+    protected SimulatorGUI simulatorGUI;
 
     private final int totalPackageCount;
     private final float lineStroke;
@@ -264,7 +264,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
             activeRobots.removeAll(toRemove);
 
             // 5. Refresh display
-            warehouseDisplay.setPackageOverlay(packageOverlay);
+            simulatorGUI.setPackageOverlay(packageOverlay);
 
             // Build active-robot stats: {packageId, zone, stepsInTransit}
             List<int[]> activeStats = new ArrayList<>();
@@ -275,8 +275,8 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
                     step - robot.getPackage().spawnStep
                 });
             }
-            warehouseDisplay.updateStats(step, deliveredCount, totalPackageCount,
-                                         totalDeliveryTime, activeStats, deliveredRecords);
+            simulatorGUI.updateStats(step, deliveredCount, totalPackageCount,
+                                     totalDeliveryTime, activeStats, deliveredRecords);
 
             refreshGW();
 
@@ -317,7 +317,7 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
         // Separator lines: after robot entry 1 (row 2), between package sub-zones (5,8), after zone (11)
         int[] separatorRows = {2, 5, 8, 11};
 
-        warehouseDisplay = new WarehouseDisplay(
+        simulatorGUI = new SimulatorGUI(
             (ColorSimpleCell[][]) this.environment.getGrid(),
             this.sp.display_x, this.sp.display_y,
             cellSize, this.sp.display_title,
@@ -329,11 +329,11 @@ public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSi
             this.padding,
             this.showGrid
         );
-        warehouseDisplay.init();
+        simulatorGUI.init();
     }
 
     public void refreshGW() {
-        warehouseDisplay.refresh();
+        simulatorGUI.refresh();
     }
 
     // ---- Helpers -------------------------------------------------------------

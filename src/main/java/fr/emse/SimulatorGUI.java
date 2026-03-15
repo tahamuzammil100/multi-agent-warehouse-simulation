@@ -16,20 +16,29 @@ import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
 /**
- * Custom warehouse renderer.
+ * SimulatorGUI - Main graphical user interface for the warehouse simulation.
  *
- * Rendering layers (back to front):
- *   1. Grey cell backgrounds
- *   2. Right-panel zone colours (cols 18-19, per-row teal / blue / purple)
- *   3. Yellow intermediate-storage rectangles (semi-transparent)
- *   4. Red hatched oval zones (Z1 / Z2 storage areas)
- *   5. Grid lines
- *   6. Thick separator lines on right panel
- *   7. Content: obstacles, robots, human agents
+ * This class handles all visual rendering of the warehouse environment and provides
+ * a real-time view of the simulation state. It displays the warehouse grid, all
+ * moving entities (robots, workers, packages), static obstacles, and delivery statistics.
  *
- * A statistics side-panel on the right shows per-package and overall delivery info.
+ * Rendering Layers (drawn from back to front):
+ *   1. Base layer: Grey cell backgrounds for the warehouse floor
+ *   2. Zone backgrounds: Color-coded entry zones on the right panel (columns 18-19)
+ *   3. Safe zones: Semi-transparent yellow rectangles marking intermediate storage areas
+ *   4. Delivery zones: Red hatched oval areas indicating package delivery locations
+ *   5. Grid overlay: Optional grid lines showing cell boundaries
+ *   6. Zone dividers: Thick separator lines between different warehouse sections
+ *   7. Waiting packages: Small colored circles at entry points
+ *   8. Active entities: Obstacles (gray squares), robots (colored squares), workers (circles)
+ *   9. Border walls: Thick black perimeter with entry/exit openings
+ *
+ * Statistics Display:
+ *   - Right sidebar panel showing real-time delivery metrics
+ *   - Per-package tracking (ID, zone, transit time)
+ *   - Overall performance statistics (total delivered, average time)
  */
-public class WarehouseDisplay {
+public class SimulatorGUI {
 
     private final ColorSimpleCell[][] grid;
 
@@ -81,16 +90,16 @@ public class WarehouseDisplay {
 
     // -------------------------------------------------------------------------
 
-    public WarehouseDisplay(ColorSimpleCell[][] grid,
-                            int windowX, int windowY,
-                            int cellSize, String title,
-                            int[][] ovalZones,
-                            int[][] yellowZones,
-                            Color[] rowRightColors,
-                            int[] separatorRows,
-                            float lineStroke,
-                            int padding,
-                            boolean showGrid) {
+    public SimulatorGUI(ColorSimpleCell[][] grid,
+                        int windowX, int windowY,
+                        int cellSize, String title,
+                        int[][] ovalZones,
+                        int[][] yellowZones,
+                        Color[] rowRightColors,
+                        int[] separatorRows,
+                        float lineStroke,
+                        int padding,
+                        boolean showGrid) {
         this.grid           = grid;
         this.ovalZones      = ovalZones      != null ? ovalZones      : new int[0][];
         this.yellowZones    = yellowZones    != null ? yellowZones    : new int[0][];
