@@ -1,74 +1,41 @@
 package fr.emse;
 
-import fr.emse.fayol.maqit.simulator.components.ColorSituatedComponent;
+import java.awt.Color;
 
 /**
- * Represents a pallet that needs to be delivered in the warehouse simulation.
- * Pallets have an entry time, destination zone, and are carried by robots.
+ * Represents a package in the warehouse.
+ *
+ * Each package has:
+ *   - An entry cell (where it physically arrives on the right edge, col 19)
+ *   - A delivery zone (1 = bottom-left oval, 2 = top-left oval)
+ *   - A colour that identifies its zone (green = zone 1, orange = zone 2)
+ *   - An arrival step (when it appears in the simulation)
  */
-public class Pallet extends ColorSituatedComponent {
+public class Pallet {
 
-    private int entryTime;           // Time step when pallet was created
-    private int destinationZoneId;   // ID of the exit zone this pallet should go to
-    private int associatedRobotId;   // ID of robot carrying this pallet (-1 if not assigned)
+    /** Green packages → zone 1 (bottom-left oval), robot entry row 2. */
+    public static final Color COLOR_ZONE1 = new Color(60, 180, 80);
 
-    /**
-     * Creates a new pallet at the specified position with the given color.
-     *
-     * @param pos Position [x, y] on the grid
-     * @param rgb Color [red, green, blue] values (0-255)
-     * @param entryTime Simulation step when pallet was created
-     * @param destinationZoneId Target exit zone ID
-     */
-    public Pallet(int[] pos, int[] rgb, int entryTime, int destinationZoneId) {
-        super(pos, rgb);
-        this.entryTime = entryTime;
-        this.destinationZoneId = destinationZoneId;
-        this.associatedRobotId = -1;  // Not assigned initially
-    }
+    /** Orange packages → zone 2 (top-left oval), robot entry row 12. */
+    public static final Color COLOR_ZONE2 = new Color(220, 120, 40);
 
-    /**
-     * Gets the time step when this pallet entered the system.
-     * @return Entry time in simulation steps
-     */
-    public int getEntryTime() {
-        return entryTime;
-    }
+    public final int id;
+    public final int[] entryCell;   // [row, col] where this package physically arrives
+    public final int deliveryZone;  // 1 = bottom-left oval, 2 = top-left oval
+    public final Color packageColor;
+    public final int arrivalStep;
 
-    /**
-     * Gets the destination zone ID for this pallet.
-     * @return Destination zone ID
-     */
-    public int getDestinationZoneId() {
-        return destinationZoneId;
-    }
-
-    /**
-     * Gets the ID of the robot carrying this pallet.
-     * @return Robot ID, or -1 if not assigned
-     */
-    public int getAssociatedRobotId() {
-        return associatedRobotId;
-    }
-
-    /**
-     * Assigns a robot to carry this pallet.
-     * @param robotId ID of the robot
-     */
-    public void setAssociatedRobotId(int robotId) {
-        this.associatedRobotId = robotId;
-    }
-
-    @Override
-    public fr.emse.fayol.maqit.simulator.components.ComponentType getComponentType() {
-        return fr.emse.fayol.maqit.simulator.components.ComponentType.object;
+    public Pallet(int id, int[] entryCell, int deliveryZone, int arrivalStep) {
+        this.id           = id;
+        this.entryCell    = entryCell;
+        this.deliveryZone = deliveryZone;
+        this.packageColor = (deliveryZone == 1) ? COLOR_ZONE1 : COLOR_ZONE2;
+        this.arrivalStep  = arrivalStep;
     }
 
     @Override
     public String toString() {
-        return "Pallet[entryTime=" + entryTime +
-               ", destination=" + destinationZoneId +
-               ", robot=" + associatedRobotId +
-               ", pos=(" + x + "," + y + ")]";
+        return String.format("Pallet#%d(zone=%d, entry=[%d,%d], arrival=%d)",
+                id, deliveryZone, entryCell[0], entryCell[1], arrivalStep);
     }
 }

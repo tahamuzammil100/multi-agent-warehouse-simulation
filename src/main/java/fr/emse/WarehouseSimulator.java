@@ -1,340 +1,427 @@
 package fr.emse;
 
 import java.awt.Color;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.File;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
-import fr.emse.fayol.maqit.simulator.ColorSimFactory;
-import fr.emse.fayol.maqit.simulator.components.ColorInteractionRobot;
-import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
-import fr.emse.fayol.maqit.simulator.components.ColorRobot;
-import fr.emse.fayol.maqit.simulator.components.Message;
+import org.ini4j.Ini;
+
+import fr.emse.fayol.maqit.simulator.SimFactory;
 import fr.emse.fayol.maqit.simulator.configuration.IniFile;
 import fr.emse.fayol.maqit.simulator.configuration.SimProperties;
+import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
+import fr.emse.fayol.maqit.simulator.components.ColorSituatedComponent;
 import fr.emse.fayol.maqit.simulator.environment.ColorGridEnvironment;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
 /**
- * Warehouse simulation where robots transport pallets from entry zones to exit zones.
- * Implements the Reference Model: 1 robot per pallet, no battery management, no intermediate areas.
+ * Warehouse Simulator — Package-Triggered Robot Model
+ *
+ * Layout (15 rows × 20 cols):
+ *   Package entry zones : col 19, rows 3-5 (zone A), 6-8 (zone B), 9-11 (zone C)
+ *   Robot entry 1       : (2, 19)  — spawns zone-1 robots
+ *   Robot entry 2       : (12, 19) — spawns zone-2 robots
+ *   Delivery zone 1     : top-left    rows 1-2,  cols 1-3  (target centre {2,2})
+ *   Delivery zone 2     : bottom-left rows 12-13, cols 1-3 (target centre {13,2})
+ *   Robot exit zone 1   : rows 0-2,   col 0  (target {1,0})
+ *   Robot exit zone 2   : rows 12-14, col 0  (target {13,0})
+ *
+ * Flow:
+ *   1. Package arrives randomly at a package entry cell, assigned green (zone 1)
+ *      or orange (zone 2).
+ *   2. A robot spawns from the corresponding robot entry point.
+ *   3. Robot navigates: robot-entry → package cell → delivery point → exit cell.
+ *   4. Robot is removed from the grid after reaching the exit.
  */
-public class WarehouseSimulator extends ColorSimFactory {
+public class WarehouseSimulator extends SimFactory<ColorGridEnvironment, ColorSituatedComponent> {
 
-    // Zones
-    private int[] entryZonePosition;   // Entry zone (Zone A) position
-    private ExitZone exitZone;         // Exit zone (Zone Z)
+    // ---- Hardcoded zone layout -----------------------------------------------
 
-    // Pallets and tracking
-    private List<Pallet> activePallets;           // Pallets currently in system
-    private int palletCounter;                    // Counter for pallet IDs
-    private List<WarehouseRobot> activeRobots;    // Track robots manually
+    private static final int[][] PACKAGE_ENTRIES = {
+        {3,19},{4,19},{5,19},        // entry zone A
+        {6,19},{7,19},{8,19},        // entry zone B
+        {9,19},{10,19},{11,19}       // entry zone C
+    };
 
-    // Statistics (for Phase 6)
-    private int totalDeliveryTime;           // Sum of all delivery times
-    private int palletsDelivered;            // Number of pallets delivered
-    private int currentStep;                 // Current simulation step
+    private static final int[] ROBOT_ENTRY_1 = {2,  19};  // zone-1 robot spawn
+    private static final int[] ROBOT_ENTRY_2 = {12, 19};  // zone-2 robot spawn
 
-    public WarehouseSimulator(SimProperties sp) {
+    private static final int[] SAFEPOINT_1   = {4,  11};  // centre of safepoint 1 (rows 3-5, cols 11-12) — zone 1
+    private static final int[] SAFEPOINT_2   = {10, 11};  // centre of safepoint 2 (rows 9-11, cols 11-12) — zone 2
+
+    private static final int[] DELIVERY_1    = {2,  2};   // centre of top-left zone 1 (rows 1-2, cols 1-3)
+    private static final int[] DELIVERY_2    = {13, 2};   // centre of bottom-left zone 2 (rows 12-13, cols 1-3)
+
+    private static final int[] EXIT_1        = {1,  0};   // middle of zone-1 exit column (rows 0-2, col 0)
+    private static final int[] EXIT_2        = {13, 0};   // middle of zone-2 exit column (rows 12-14, col 0)
+
+    // ---- Fields --------------------------------------------------------------
+
+    protected WarehouseDisplay warehouseDisplay;
+
+    private final int totalPallets;
+    private final float lineStroke;
+    private final int padding;
+    private final boolean showGrid;
+
+    /** All packages pre-generated, sorted by arrival step. */
+    private final Queue<Pallet> upcomingPackages = new LinkedList<>();
+
+    /** Packages that have arrived but not yet assigned a robot. */
+    private final List<Pallet> waitingPackages = new ArrayList<>();
+
+    /** Currently active robots (spawned on demand). */
+    private final List<AMR> activeAmrs = new ArrayList<>();
+
+    /** Human agents. */
+    private final List<HumanAgent> humans = new ArrayList<>();
+
+    /** Package display overlay: "row,col" → colour. Updated each step. */
+    private final Map<String, Color> packageOverlay = new ConcurrentHashMap<>();
+
+    private long totalDeliveryTime = 0;
+    private int  deliveredCount    = 0;
+    private int  nextAmrId         = 0;
+
+    /**
+     * Completed deliveries: each entry is int[]{palletId, zone, deliverySteps}.
+     * Passed to the stats panel each step.
+     */
+    private final List<int[]> deliveredRecords = new CopyOnWriteArrayList<>();
+
+    private Random random;
+
+    // ---- Constructor ---------------------------------------------------------
+
+    public WarehouseSimulator(SimProperties sp, int totalPallets, float lineStroke, int padding, boolean showGrid) {
         super(sp);
-        this.activePallets = new ArrayList<>();
-        this.activeRobots = new ArrayList<>();
-        this.palletCounter = 0;
-        this.totalDeliveryTime = 0;
-        this.palletsDelivered = 0;
-        this.currentStep = 0;
-
-        // Fixed positions for simple initial setup
-        this.entryZonePosition = new int[]{0, 0};  // Top-left corner
+        this.totalPallets = totalPallets;
+        this.lineStroke   = lineStroke;
+        this.padding      = padding;
+        this.showGrid     = showGrid;
+        this.random = new Random(sp.seed);
     }
+
+    // ---- SimFactory overrides ------------------------------------------------
 
     @Override
     public void createEnvironment() {
         this.environment = new ColorGridEnvironment(this.sp.seed);
-        System.out.println("Created " + this.sp.rows + "x" + this.sp.columns + " warehouse environment");
     }
 
     @Override
     public void createObstacle() {
-        // Reduce obstacles to ensure clear paths exist
-        int numObstacles = Math.min(this.sp.nbobstacle, 5);  // Max 5 obstacles
-
-        int[] obstacleRgb = new int[]{
+        int[] rgb = {
             this.sp.colorobstacle.getRed(),
             this.sp.colorobstacle.getGreen(),
             this.sp.colorobstacle.getBlue()
         };
 
-        for (int i = 0; i < numObstacles; i++) {
-            int[] pos = this.environment.getPlace();
+        int[][] positions = {
+            {0,  5},                                                                                                                                                                           
+            {2, 11}, {2, 14},                                                                                                                                                                  
+            {5,  2}, {5,  6},                                                                                                                                                                  
+            {6, 15},                                                                                                                                                                           
+            {7,  1},                                                                                                                                                                           
+            {8,  7},                                                                                                                                                                           
+            {9,  4},                                                                                                                                                                           
+            {11, 10},                                                                                                                                                                          
+            {13,  7}, {13, 16}                                                                                                                                                                 
+        }; 
 
-            // Don't place obstacles at entry or exit zones
-            while ((pos[0] == entryZonePosition[0] && pos[1] == entryZonePosition[1]) ||
-                   (pos[0] == this.sp.rows - 1 && pos[1] == this.sp.columns - 1)) {
-                pos = this.environment.getPlace();
-            }
-
-            ColorObstacle obstacle = new ColorObstacle(pos, obstacleRgb);
-            addNewComponent(obstacle);
-        }
-        System.out.println("Created " + numObstacles + " obstacles");
-    }
-
-    @Override
-    public void createGoal() {
-        // Create exit zone at bottom-right corner
-        int[] exitPos = new int[]{this.sp.rows - 1, this.sp.columns - 1};
-        int[] goalRgb = new int[]{
-            this.sp.colorgoal.getRed(),
-            this.sp.colorgoal.getGreen(),
-            this.sp.colorgoal.getBlue()
-        };
-
-        this.exitZone = new ExitZone(1, exitPos, goalRgb);
-        this.exitZone.setLocation(exitPos);
-        addNewComponent(this.exitZone);
-
-        System.out.println("Created exit zone at (" + exitPos[0] + "," + exitPos[1] + ")");
+        for (int[] pos : positions) addNewComponent(new ColorObstacle(pos, rgb));
     }
 
     @Override
     public void createRobot() {
-        // Don't create robots here - will be created in schedule()
-        System.out.println("Robot creation will be done at start of schedule()");
-    }
-
-    /**
-     * Creates a new pallet at the entry zone.
-     * @return The created pallet
-     */
-    private Pallet createPallet() {
-        int[] palletRgb = new int[]{255, 255, 0};  // Yellow color for pallets
-        int[] palletPos = new int[]{entryZonePosition[0], entryZonePosition[1]};
-
-        Pallet pallet = new Pallet(palletPos, palletRgb, currentStep, exitZone.getZoneId());
-        pallet.setLocation(palletPos);
-        addNewComponent(pallet);
-        activePallets.add(pallet);
-
-        palletCounter++;
-        System.out.println("Created pallet #" + palletCounter + " at entry zone (" +
-                           palletPos[0] + "," + palletPos[1] + ")");
-        return pallet;
-    }
-
-    /**
-     * Creates a robot at the entry zone and assigns it a pallet.
-     * @param pallet Pallet to assign to the robot
-     * @return The created robot
-     */
-    private WarehouseRobot createRobotWithPallet(Pallet pallet) {
-        int[] robotPos = new int[]{entryZonePosition[0], entryZonePosition[1]};
-
-        WarehouseRobot robot = new WarehouseRobot(
-            "Robot" + palletCounter,
-            this.sp.field,
-            this.sp.debug,
-            robotPos,
-            this.sp.colorrobot,
-            this.sp.rows,
-            this.sp.columns
-        );
-
-        // Assign pallet and goal to robot
-        robot.assignPallet(pallet);
-        robot.setGoalPosition(exitZone.getPosition());
-
-        addNewComponent(robot);
-        activeRobots.add(robot);  // Track robot manually
-
-        System.out.println("Created robot '" + robot.getName() +
-                           "' at entry zone with pallet #" + palletCounter);
-        return robot;
-    }
-
-    /**
-     * Initializes the first pallet and robot.
-     */
-    public void initializeFirstDelivery() {
-        Pallet firstPallet = createPallet();
-        createRobotWithPallet(firstPallet);
-    }
-
-    /**
-     * Handles a successful delivery when robot reaches goal.
-     * Calculates delivery time and updates statistics.
-     * @param robot Robot that completed delivery
-     */
-    private void handleDelivery(WarehouseRobot robot) {
-        Pallet pallet = robot.getCurrentPallet();
-        if (pallet == null) {
-            System.out.println("WARNING: Robot " + robot.getName() + " reached goal without pallet!");
-            return;
+        // Pre-generate all packages; spread arrivals randomly across first half of simulation
+        int spreadSteps = Math.max(1, Math.min(this.sp.step / 2, 200));
+        for (int i = 0; i < totalPallets; i++) {
+            int[] entryCell  = PACKAGE_ENTRIES[random.nextInt(PACKAGE_ENTRIES.length)].clone();
+            int deliveryZone = random.nextInt(2) + 1;
+            int arrivalStep  = random.nextInt(spreadSteps);
+            upcomingPackages.add(new Pallet(i, entryCell, deliveryZone, arrivalStep));
         }
+        // Sort by arrival step
+        List<Pallet> sorted = new ArrayList<>(upcomingPackages);
+        sorted.sort(Comparator.comparingInt(p -> p.arrivalStep));
+        upcomingPackages.clear();
+        upcomingPackages.addAll(sorted);
 
-        // Calculate delivery time
-        int deliveryTime = currentStep - pallet.getEntryTime();
-
-        // Update statistics (Phase 6)
-        totalDeliveryTime += deliveryTime;
-        palletsDelivered++;
-
-        // Record delivery in exit zone
-        exitZone.recordDelivery(pallet.getId());
-
-        System.out.println("\n*** DELIVERY COMPLETE! ***");
-        System.out.println("Robot: " + robot.getName());
-        System.out.println("Pallet: #" + palletCounter + " (ID: " + pallet.getId() + ")");
-        System.out.println("Entry time: Step " + pallet.getEntryTime());
-        System.out.println("Delivery time: Step " + currentStep);
-        System.out.println("Time taken: " + deliveryTime + " steps");
-        System.out.println("Total pallets delivered: " + palletsDelivered);
-        System.out.println("Average delivery time: " +
-                           String.format("%.2f", (double) totalDeliveryTime / palletsDelivered) + " steps");
-        System.out.println("***************************\n");
-    }
-
-    /**
-     * Removes robot and its pallet from the simulation after successful delivery.
-     * @param robot Robot to remove
-     */
-    private void removeRobotAndPallet(WarehouseRobot robot) {
-        Pallet pallet = robot.getCurrentPallet();
-
-        // Remove pallet from tracking (pallet is not on grid, it's carried by robot)
-        if (pallet != null) {
-            activePallets.remove(pallet);
-            System.out.println("Removed pallet #" + pallet.getId() + " from tracking");
+        // Create human agents
+        int[][] humanPositions = {{4,8},{7,4},{8,11},{8,17},{11,8},{13,13}};
+        Color humanColor = new Color(200, 160, 100);
+        for (int i = 0; i < humanPositions.length; i++) {
+            HumanAgent h = new HumanAgent(
+                "Human" + i, this.sp.field, humanPositions[i],
+                humanColor, this.sp.rows, this.sp.columns,
+                this.environment, (long) this.sp.seed + i + 1
+            );
+            addNewComponent(h);
+            humans.add(h);
         }
-
-        // Remove robot from grid and component list
-        this.environment.removeCellContent(robot.getX(), robot.getY());
-        System.out.println("Removed robot '" + robot.getName() + "' from grid at (" +
-                           robot.getX() + "," + robot.getY() + ")");
     }
 
     @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    public void createGoal() {
+        // Visual zones are defined in initializeGW(). No grid objects needed.
+    }
+
+    @Override
+    public void addNewComponent(ColorSituatedComponent sc) {
+        int[] pos = sc.getLocation();
+        this.environment.setCellContent(pos[0], pos[1], sc);
+    }
+
+    @Override
+    public void updateEnvironment(int[] from, int[] to, int id) {
+        this.environment.moveComponent(from, to);
+    }
+
+    // ---- Simulation loop -----------------------------------------------------
+
+    @Override
     public void schedule() {
-        // Create first pallet and robot at start of simulation
-        System.out.println("\n--- Creating first pallet and robot ---");
-        Pallet firstPallet = createPallet();
-        createRobotWithPallet(firstPallet);
-        refreshGW();
+        System.out.println("=== Warehouse Simulation Start ===");
+        System.out.println("Total packages: " + totalPallets);
 
-        System.out.println("Initial robot count: " + activeRobots.size());
+        for (int step = 0; step < this.sp.step; step++) {
+            System.out.printf("Step %d | Delivered: %d/%d | Active: %d | Waiting: %d%n",
+                    step, deliveredCount, totalPallets,
+                    activeAmrs.size(), waitingPackages.size());
 
-        for (int i = 0; i < this.sp.step; i++) {
-            currentStep = i;
-            System.out.println("\n========== Step: " + currentStep + " ==========");
-            System.out.println("Active robots: " + activeRobots.size());
+            // 1. Release packages arriving at this step
+            while (!upcomingPackages.isEmpty()
+                    && upcomingPackages.peek().arrivalStep <= step) {
+                Pallet pkg = upcomingPackages.poll();
+                waitingPackages.add(pkg);
+                packageOverlay.put(key(pkg.entryCell), pkg.packageColor);
+                System.out.println("  [ARRIVED]  " + pkg);
+            }
 
-            // Distribute messages between robots (for future use)
-            for (WarehouseRobot r : activeRobots) {
-                for (WarehouseRobot rr : activeRobots) {
-                    for (Message m : (List<Message>) ((ColorInteractionRobot) rr).popSentMessages()) {
-                        if (r.getId() != rr.getId()) {
-                            ((ColorInteractionRobot) r).receiveMessage(m);
-                        }
-                    }
+            // 2. Try to spawn a robot for each waiting package (if entry cell is free)
+            for (Pallet pkg : new ArrayList<>(waitingPackages)) {
+                int[] robotEntry = (pkg.deliveryZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
+                if (isCellFree(robotEntry)) {
+                    spawnRobot(pkg);
+                    waitingPackages.remove(pkg);
                 }
             }
 
-            // Move each robot and check for deliveries
-            List<WarehouseRobot> robotsCopy = new ArrayList<>(activeRobots);
-            List<WarehouseRobot> robotsToRemove = new ArrayList<>();
+            // 3. Move humans
+            for (HumanAgent h : humans) {
+                int[] hOld = h.getLocation();
+                h.updatePerception(this.environment.getNeighbor(h.getX(), h.getY(), h.getField()));
+                h.move(1);
+                int[] hNew = h.getLocation();
+                if (hNew[0] != hOld[0] || hNew[1] != hOld[1])
+                    updateEnvironment(hOld, hNew, h.getId());
+            }
 
-            for (WarehouseRobot r : robotsCopy) {
-                int[] oldPos = r.getLocation();
-                ColorSimpleCell[][] per = this.environment.getNeighbor(r.getX(), r.getY(), r.getField());
-                r.updatePerception(per);
-                r.move(1);
-                updateEnvironment(oldPos, r.getLocation(), r.getId());
+            // 4. Move active AMRs and handle state transitions
+            List<AMR> toRemove = new ArrayList<>();
+            for (AMR amr : activeAmrs) {
+                AMR.State before = amr.getState();
+                int[] oldPos = amr.getLocation();
 
-                // Check if robot reached goal - handle delivery and remove IMMEDIATELY
-                if (r.hasReachedGoal()) {
-                    handleDelivery(r);
-                    removeRobotAndPallet(r);  // Remove from grid immediately to free the goal
-                    robotsToRemove.add(r);
+                amr.updatePerception(
+                        this.environment.getNeighbor(amr.getX(), amr.getY(), amr.getField()));
+                amr.move(1);
+
+                int[] newPos = amr.getLocation();
+                if (newPos[0] != oldPos[0] || newPos[1] != oldPos[1])
+                    updateEnvironment(oldPos, newPos, amr.getId());
+
+                AMR.State after = amr.getState();
+
+                if (before == AMR.State.GOING_TO_PACKAGE
+                        && after == AMR.State.GOING_TO_SAFEPOINT) {
+                    packageOverlay.remove(key(amr.getPallet().entryCell));
+                    System.out.println("  [PICKED UP] " + amr.getPallet()
+                            + " by AMR#" + amr.getId());
+                }
+
+                if (before == AMR.State.GOING_TO_DELIVERY
+                        && after == AMR.State.GOING_TO_EXIT) {
+                    int tp = step - amr.getPallet().arrivalStep;
+                    totalDeliveryTime += tp;
+                    deliveredCount++;
+                    deliveredRecords.add(new int[]{
+                        amr.getPallet().id, amr.getPallet().deliveryZone, tp
+                    });
+                    System.out.printf("  [DELIVERED] %s by AMR#%d in %d steps%n",
+                            amr.getPallet(), amr.getId(), tp);
+                }
+
+                if (after == AMR.State.DONE) {
+                    clearCell(amr.getLocation());
+                    toRemove.add(amr);
+                    System.out.println("  [EXITED]   AMR#" + amr.getId());
                 }
             }
+            activeAmrs.removeAll(toRemove);
 
-            // Remove delivered robots from tracking list
-            for (WarehouseRobot wr : robotsToRemove) {
-                activeRobots.remove(wr);  // Remove from our tracking list
+            // 5. Refresh display
+            warehouseDisplay.setPackageOverlay(packageOverlay);
+
+            // Build active-robot stats: {palletId, zone, stepsInTransit}
+            List<int[]> activeStats = new ArrayList<>();
+            for (AMR amr : activeAmrs) {
+                activeStats.add(new int[]{
+                    amr.getPallet().id,
+                    amr.getPallet().deliveryZone,
+                    step - amr.getPallet().arrivalStep
+                });
             }
+            warehouseDisplay.updateStats(step, deliveredCount, totalPallets,
+                                         totalDeliveryTime, activeStats, deliveredRecords);
 
-            // Dynamic respawning: Create new pallets and robots after deliveries (Phase 7)
-            for (int j = 0; j < robotsToRemove.size(); j++) {
-                System.out.println("\n--- Spawning new pallet and robot ---");
-                Pallet newPallet = createPallet();
-                createRobotWithPallet(newPallet);
-            }
-
-            // Refresh display
             refreshGW();
 
-            // Wait between steps
             try {
                 Thread.sleep(this.sp.waittime);
-            } catch (InterruptedException ex) {
-                System.out.println(ex);
+            } catch (InterruptedException e) {
+                System.out.println(e);
             }
 
-            // Stop if no robots left
-            if (activeRobots.isEmpty()) {
-                System.out.println("\nAll robots have completed deliveries!");
-                break;
+            if (deliveredCount >= totalPallets
+                    && activeAmrs.isEmpty()
+                    && waitingPackages.isEmpty()) break;
+        }
+
+        printResults();
+    }
+
+    // ---- Graphical window ----------------------------------------------------
+
+    public void initializeGW() {
+        int cellSize = this.sp.display_width / this.sp.columns;
+
+        // Oval zones: hatched red (zone 1 = top-left, zone 2 = bottom-left)
+        int[][] ovalZones = {
+            {1, 1, 2,  3},   // zone 1 — top-left    (rows 1-2,  cols 1-3)
+            {12, 1, 13, 3}   // zone 2 — bottom-left (rows 12-13, cols 1-3)
+        };
+
+        // Right-panel colours (cols 18-19)
+        Color blue       = new Color(120, 185, 225);   // robot entry cells
+        Color lightGreen = new Color(150, 215, 150);   // package entry cells
+        Color[] rowRightColors = new Color[this.sp.rows];
+        rowRightColors[2]  = blue;         // robot entry 1
+        rowRightColors[12] = blue;         // robot entry 2
+        for (int r = 3; r <= 11; r++)
+            rowRightColors[r] = lightGreen; // package entry zone
+
+        // Separator lines: after robot entry 1 (row 2), between package sub-zones (5,8), after zone (11)
+        int[] separatorRows = {2, 5, 8, 11};
+
+        warehouseDisplay = new WarehouseDisplay(
+            (ColorSimpleCell[][]) this.environment.getGrid(),
+            this.sp.display_x, this.sp.display_y,
+            cellSize, this.sp.display_title,
+            ovalZones,
+            new int[][]{{3, 11, 5, 12}, {9, 11, 11, 12}},  // safepoint zones
+            rowRightColors,
+            separatorRows,
+            this.lineStroke,
+            this.padding,
+            this.showGrid
+        );
+        warehouseDisplay.init();
+    }
+
+    public void refreshGW() {
+        warehouseDisplay.refresh();
+    }
+
+    // ---- Helpers -------------------------------------------------------------
+
+    private void spawnRobot(Pallet pkg) {
+        int[] robotEntry    = (pkg.deliveryZone == 1) ? ROBOT_ENTRY_1 : ROBOT_ENTRY_2;
+        int[] safepointPos  = (pkg.deliveryZone == 1) ? SAFEPOINT_1   : SAFEPOINT_2;
+        int[] deliveryPos   = (pkg.deliveryZone == 1) ? DELIVERY_1    : DELIVERY_2;
+        int[] exitPos       = (pkg.deliveryZone == 1) ? EXIT_1        : EXIT_2;
+
+        AMR amr = new AMR(
+            "AMR" + nextAmrId++,
+            this.sp.field, this.sp.debug,
+            robotEntry,
+            this.sp.colorrobot,
+            this.sp.rows, this.sp.columns,
+            this.environment,
+            pkg,
+            pkg.entryCell,
+            safepointPos,
+            deliveryPos,
+            exitPos
+        );
+        addNewComponent(amr);
+        activeAmrs.add(amr);
+        System.out.println("  [SPAWNED]  AMR#" + amr.getId() + " for " + pkg);
+    }
+
+    private boolean isCellFree(int[] pos) {
+        ColorSimpleCell[][] grid = (ColorSimpleCell[][]) this.environment.getGrid();
+        ColorSimpleCell cell = grid[pos[0]][pos[1]];
+        return cell == null || cell.getContent() == null;
+    }
+
+    private void clearCell(int[] pos) {
+        // removeCellContent() only clears SimpleCell.content (SituatedComponent),
+        // but the display reads ColorSimpleCell.content (ColorSituatedComponent) — a separate
+        // shadowed field. We must null it directly via reflection.
+        try {
+            ColorSimpleCell[][] grid = (ColorSimpleCell[][]) this.environment.getGrid();
+            ColorSimpleCell cell = grid[pos[0]][pos[1]];
+            if (cell != null) {
+                java.lang.reflect.Field f = cell.getClass().getDeclaredField("content");
+                f.setAccessible(true);
+                f.set(cell, null);
             }
-        }
-
-        // Print final statistics
-        printStatistics();
+        } catch (ReflectiveOperationException ignored) {}
+        this.environment.removeCellContent(pos[0], pos[1]);
     }
 
-    /**
-     * Prints simulation statistics.
-     */
-    private void printStatistics() {
-        System.out.println("\n========================================");
-        System.out.println("SIMULATION COMPLETE");
-        System.out.println("========================================");
-        System.out.println("Pallets delivered: " + palletsDelivered);
-        System.out.println("Total delivery time: " + totalDeliveryTime + " steps");
-        if (palletsDelivered > 0) {
-            double avgTime = (double) totalDeliveryTime / palletsDelivered;
-            System.out.println("Average delivery time: " + String.format("%.2f", avgTime) + " steps");
-        }
-        System.out.println("========================================");
+    private String key(int[] pos) {
+        return pos[0] + "," + pos[1];
     }
+
+    private void printResults() {
+        System.out.println("\n=== RESULTS ===");
+        System.out.println("Delivered: " + deliveredCount + "/" + totalPallets);
+        System.out.println("Total delivery time:   " + totalDeliveryTime + " steps");
+        System.out.printf ("Average delivery time: %.1f steps/package%n",
+                deliveredCount > 0 ? (double) totalDeliveryTime / deliveredCount : 0.0);
+    }
+
+    // ---- Entry point ---------------------------------------------------------
 
     public static void main(String[] args) throws Exception {
-        System.out.println("===========================================");
-        System.out.println("WAREHOUSE ROBOT SIMULATOR - Reference Model");
-        System.out.println("===========================================\n");
-
         IniFile ifile = new IniFile("configuration.ini");
         SimProperties sp = new SimProperties(ifile);
         sp.simulationParams();
         sp.displayParams();
 
-        System.out.println("Simulation parameters:");
-        System.out.println("  Grid: " + sp.rows + "x" + sp.columns);
-        System.out.println("  Entry zone: (0, 0)");
-        System.out.println("  Exit zone: (" + (sp.rows - 1) + ", " + (sp.columns - 1) + ")");
-        System.out.println("  Steps: " + sp.step);
-        System.out.println("  Seed: " + sp.seed);
-        System.out.println("  Field: " + sp.field);
-        System.out.println("  Wait time: " + sp.waittime + "ms\n");
+        Ini ini = new Ini(new File("configuration.ini"));
+        int     totalPallets = Integer.parseInt(ini.get("warehouse", "total_pallets").trim());
+        float   lineStroke   = Float.parseFloat(ini.get("warehouse", "line_stroke").trim());
+        int     padding      = Integer.parseInt(ini.get("warehouse", "padding").trim());
+        boolean showGrid     = Integer.parseInt(ini.get("warehouse", "show_grid").trim()) != 0;
 
-        WarehouseSimulator sim = new WarehouseSimulator(sp);
+        System.out.println("=== Configuration ===");
+        System.out.println("Grid:           " + sp.rows + " x " + sp.columns);
+        System.out.println("Total packages: " + totalPallets);
+        System.out.println("Line stroke:    " + lineStroke + "px");
+
+        WarehouseSimulator sim = new WarehouseSimulator(sp, totalPallets, lineStroke, padding, showGrid);
         sim.createEnvironment();
         sim.createObstacle();
+        sim.createRobot();
         sim.createGoal();
-        sim.createRobot();  // This creates the first pallet and robot
         sim.initializeGW();
         sim.refreshGW();
-
-        // Start simulation
         sim.schedule();
     }
 }
