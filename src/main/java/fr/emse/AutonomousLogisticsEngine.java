@@ -69,7 +69,7 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         this.gridVisible = showGrid;
 
         // Initialize subsystems
-        this.zoneLayout = new ZoneCoordinates();
+        this.zoneLayout = new ZoneCoordinates("configuration.ini");
         this.packageManager = new PackageScheduler(
             packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed
         );

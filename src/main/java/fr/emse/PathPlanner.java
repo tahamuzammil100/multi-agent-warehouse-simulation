@@ -168,11 +168,10 @@ public class PathPlanner {
             return true;
         }
 
-        // Allow movement through zone markers, block solid obstacles
-        boolean isSolidObstacle = cellContent instanceof ColorObstacle
-                                  && !(cellContent instanceof ZoneMarker);
+        // Block all obstacles
+        boolean isObstacle = cellContent instanceof ColorObstacle;
 
-        return !isSolidObstacle;
+        return !isObstacle;
     }
 
     /**

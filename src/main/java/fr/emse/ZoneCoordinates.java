@@ -1,62 +1,128 @@
 package fr.emse;
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.ini4j.Ini;
+
 /**
- * ZoneCoordinates - Central registry for all warehouse spatial zones.
+ * ZoneCoordinates - Loads and manages warehouse spatial zones from configuration.
  *
- * Organizes the warehouse layout into functional areas:
- * - Entry points for packages and robots
- * - Intermediate waypoints (safepoints)
- * - Delivery zones
+ * Reads zone layout from configuration.ini file:
+ * - Package entry gates
+ * - Robot spawn locations
+ * - Intermediate waypoints
+ * - Delivery targets
  * - Exit zones
+ *
+ * This makes the warehouse layout fully configurable without code changes.
  */
 public class ZoneCoordinates {
 
-    // Entry gates where packages arrive (column 19, various rows)
     private final int[][] packageGates;
-
-    // Spawn locations for delivery robots (2 zones)
     private final int[] robotSpawnZone1;
     private final int[] robotSpawnZone2;
-
-    // Intermediate waypoints robots pass through
     private final int[] waypointZone1;
     private final int[] waypointZone2;
-
-    // Target locations for package delivery
     private final int[] targetZone1;
     private final int[] targetZone2;
-
-    // Exit points where robots leave after delivery
     private final int[] exitZone1;
     private final int[] exitZone2;
 
     /**
-     * Constructs the warehouse zone layout with all predefined coordinates.
+     * Loads all zone coordinates from configuration file.
+     *
+     * @param configPath Path to configuration.ini file
      */
-    public ZoneCoordinates() {
-        // Package arrival gates (9 entry points across 3 sections)
-        this.packageGates = new int[][]{
-            {3, 19}, {4, 19}, {5, 19},  // Section A
-            {6, 19}, {7, 19}, {8, 19},  // Section B
-            {9, 19}, {10, 19}, {11, 19} // Section C
-        };
+    public ZoneCoordinates(String configPath) {
+        try {
+            Ini config = new Ini(new File(configPath));
 
-        // Robot spawn points for each zone
-        this.robotSpawnZone1 = new int[]{2, 19};
-        this.robotSpawnZone2 = new int[]{12, 19};
+            // Load package gates
+            this.packageGates = loadPackageGates(config);
 
-        // Intermediate waypoints (safety checkpoints)
-        this.waypointZone1 = new int[]{4, 11};
-        this.waypointZone2 = new int[]{10, 11};
+            // Load robot spawn points
+            this.robotSpawnZone1 = parseCoordinate(config.get("zones", "robot_spawn_zone1"));
+            this.robotSpawnZone2 = parseCoordinate(config.get("zones", "robot_spawn_zone2"));
 
-        // Final delivery targets
-        this.targetZone1 = new int[]{2, 2};
-        this.targetZone2 = new int[]{13, 2};
+            // Load waypoints
+            this.waypointZone1 = parseCoordinate(config.get("zones", "waypoint_zone1"));
+            this.waypointZone2 = parseCoordinate(config.get("zones", "waypoint_zone2"));
 
-        // Exit gates
-        this.exitZone1 = new int[]{1, 0};
-        this.exitZone2 = new int[]{13, 0};
+            // Load delivery targets
+            this.targetZone1 = parseCoordinate(config.get("zones", "target_zone1"));
+            this.targetZone2 = parseCoordinate(config.get("zones", "target_zone2"));
+
+            // Load exit points
+            this.exitZone1 = parseCoordinate(config.get("zones", "exit_zone1"));
+            this.exitZone2 = parseCoordinate(config.get("zones", "exit_zone2"));
+
+            System.out.println("Loaded zone configuration from " + configPath);
+            System.out.println("  Package gates: " + packageGates.length);
+            System.out.println("  Robot spawns: 2 zones");
+            System.out.println("  Waypoints: 2 zones");
+            System.out.println("  Delivery targets: 2 zones");
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load zone configuration: " + e.getMessage(), e);
+        }
     }
+
+    /**
+     * Loads all package entry gates from configuration.
+     * Reads package_gate1, package_gate2, etc. until no more are found.
+     */
+    private int[][] loadPackageGates(Ini config) {
+        List<int[]> gates = new ArrayList<>();
+        int index = 1;
+
+        while (true) {
+            String key = "package_gate" + index;
+            String value = config.get("zones", key);
+
+            if (value == null || value.trim().isEmpty()) {
+                break;
+            }
+
+            gates.add(parseCoordinate(value));
+            index++;
+        }
+
+        if (gates.isEmpty()) {
+            throw new RuntimeException("No package gates defined in configuration");
+        }
+
+        return gates.toArray(new int[0][]);
+    }
+
+    /**
+     * Parses a coordinate string in "row,column" format.
+     *
+     * @param coordinateString String to parse (e.g., "3,19")
+     * @return Coordinate array [row, col]
+     */
+    private int[] parseCoordinate(String coordinateString) {
+        if (coordinateString == null || coordinateString.trim().isEmpty()) {
+            throw new IllegalArgumentException("Missing coordinate in configuration");
+        }
+
+        try {
+            String[] parts = coordinateString.trim().split(",");
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Invalid coordinate format: " + coordinateString);
+            }
+
+            int row = Integer.parseInt(parts[0].trim());
+            int col = Integer.parseInt(parts[1].trim());
+            return new int[]{row, col};
+
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid coordinate format: " + coordinateString, e);
+        }
+    }
+
+    // Getters
 
     /**
      * Gets all package entry gates.
