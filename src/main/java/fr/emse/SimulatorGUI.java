@@ -1,7 +1,6 @@
 package fr.emse;
 
 import java.awt.*;
-import java.awt.geom.Ellipse2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -53,6 +52,8 @@ public class SimulatorGUI {
 
     /** Row indices after which a thick black separator line is drawn on the right panel. */
     private final int[] separatorRows;
+    /** Exit cells to highlight. Each entry is {row, col}. */
+    private final int[][] exitCells;
 
     private final int cellSize;
     private final int windowX, windowY;
@@ -100,6 +101,7 @@ public class SimulatorGUI {
                         int[][] yellowZones,
                         Color[] rowRightColors,
                         int[] separatorRows,
+                        int[][] exitCells,
                         float lineStroke,
                         int padding,
                         boolean showGrid) {
@@ -108,6 +110,7 @@ public class SimulatorGUI {
         this.yellowZones    = yellowZones    != null ? yellowZones    : new int[0][];
         this.rowRightColors = rowRightColors != null ? rowRightColors : new Color[0];
         this.separatorRows  = separatorRows  != null ? separatorRows  : new int[0];
+        this.exitCells      = exitCells      != null ? exitCells      : new int[0][];
         this.windowX  = windowX;
         this.windowY  = windowY;
         this.cellSize    = cellSize;
@@ -384,12 +387,30 @@ public class SimulatorGUI {
         }
         g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
 
-        // --- Pass 3: hatched red oval zones ----------------------------------
+        // --- Pass 3: hatched red rectangular zones ---------------------------
         for (int[] z : ovalZones) {
-            drawHatchedOval(g, z[0], z[1], z[2], z[3]);
+            drawHatchedRect(g, z[0], z[1], z[2], z[3]);
         }
 
-        // --- Pass 4: grid lines ----------------------------------------------
+        // --- Pass 4: exit markers --------------------------------------------
+        for (int[] exit : exitCells) {
+            if (exit == null || exit.length < 2) continue;
+            int row = exit[0];
+            int col = exit[1];
+            if (row < 0 || row >= rows || col < 0 || col >= cols) continue;
+
+            int px = col * cellSize;
+            int py = row * cellSize;
+
+            g.setColor(new Color(140, 230, 230));
+            g.fillRect(px, py, cellSize, cellSize);
+            g.setColor(new Color(25, 120, 120));
+            g.setStroke(new BasicStroke(2));
+            g.drawRect(px + 1, py + 1, cellSize - 2, cellSize - 2);
+            g.setStroke(new BasicStroke(1));
+        }
+
+        // --- Pass 5: grid lines ----------------------------------------------
         if (showGrid) {
             g.setColor(GRID_LINE);
             g.setStroke(new BasicStroke(1));
@@ -400,7 +421,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 5: thick separator lines on right panel --------------------
+        // --- Pass 6: thick separator lines on right panel --------------------
         g.setColor(Color.BLACK);
         g.setStroke(new BasicStroke(lineStroke));
         for (int sep : separatorRows) {
@@ -409,7 +430,7 @@ public class SimulatorGUI {
         }
         g.setStroke(new BasicStroke(1));
 
-        // --- Pass 6: waiting packages ----------------------------------------
+        // --- Pass 7: waiting packages ----------------------------------------
         Map<String, Color> overlay = packageOverlay;
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
@@ -433,7 +454,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 7: content (obstacles, robots, humans) ---------------------
+        // --- Pass 8: content (obstacles, robots, humans) ---------------------
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int px = c * cellSize, py = r * cellSize;
@@ -446,7 +467,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 8: border wall (thick black outline with entry/exit gaps) --
+        // --- Pass 9: border wall (thick black outline with entry/exit gaps) --
         int W = cols * cellSize;
         int H = rows * cellSize;
         g.setColor(Color.BLACK);
@@ -468,20 +489,20 @@ public class SimulatorGUI {
         g.setStroke(new BasicStroke(1));
     }
 
-    /** Draws a hatched red oval spanning the given grid row/col bounds. */
-    private void drawHatchedOval(Graphics2D g, int minR, int minC, int maxR, int maxC) {
+    /** Draws a hatched red rectangle spanning the given grid row/col bounds. */
+    private void drawHatchedRect(Graphics2D g, int minR, int minC, int maxR, int maxC) {
         int px = minC * cellSize;
         int py = minR * cellSize;
         int w  = (maxC - minC + 1) * cellSize;
         int h  = (maxR - minR + 1) * cellSize;
 
-        Shape oval    = new Ellipse2D.Float(px + 4, py + 4, w - 8, h - 8);
+        Shape rect    = new Rectangle(px + 3, py + 3, Math.max(1, w - 6), Math.max(1, h - 6));
         Shape oldClip = g.getClip();
 
         // Light pink fill
-        g.setClip(oval);
+        g.setClip(rect);
         g.setColor(new Color(255, 220, 220));
-        g.fill(oval);
+        g.fill(rect);
 
         // Diagonal red hatching
         g.setColor(new Color(200, 50, 50));
@@ -494,10 +515,10 @@ public class SimulatorGUI {
         g.setClip(oldClip);
         g.setStroke(new BasicStroke(1));
 
-        // Oval border
+        // Rectangle border
         g.setColor(new Color(180, 40, 40));
         g.setStroke(new BasicStroke(2));
-        g.draw(oval);
+        g.draw(rect);
         g.setStroke(new BasicStroke(1));
     }
 

@@ -362,6 +362,10 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
         // Separator lines
         int[] separators = {2, 5, 8, 11};
+        int[][] exits = {
+            zoneLayout.getExit(1),
+            zoneLayout.getExit(2)
+        };
 
         displayWindow = new SimulatorGUI(
             (ColorSimpleCell[][]) this.environment.getGrid(),
@@ -369,6 +373,7 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             cellSize, this.sp.display_title,
             deliveryZones, waypointZones,
             rightPanelColors, separators,
+            exits,
             this.gridLineWidth, this.cellPadding, this.gridVisible
         );
         displayWindow.init();
