@@ -76,6 +76,8 @@ public class SimulatorGUI {
     private volatile List<int[]> statActiveRobots  = new CopyOnWriteArrayList<>();
     /** {palletId, zone, deliverySteps} for each delivered package. */
     private volatile List<int[]> statDeliveredPkgs = new CopyOnWriteArrayList<>();
+    /** {robotId, batteryLevel, maxBattery} for each robot in the fleet. */
+    private volatile List<int[]> statRobotBatteries = new CopyOnWriteArrayList<>();
 
     private JFrame  frame;
     private JPanel  panel;
@@ -259,15 +261,18 @@ public class SimulatorGUI {
      * @param totalTime     cumulative delivery time (sum of steps per package)
      * @param activeRobots  list of int[]{palletId, zone, stepsInTransit}
      * @param deliveredPkgs list of int[]{palletId, zone, deliverySteps} (all delivered so far)
+     * @param robotBatteries list of int[]{robotId, batteryLevel, maxBattery} for all robots
      */
     public void updateStats(int step, int delivered, int total, long totalTime,
-                            List<int[]> activeRobots, List<int[]> deliveredPkgs) {
+                            List<int[]> activeRobots, List<int[]> deliveredPkgs,
+                            List<int[]> robotBatteries) {
         this.statStep           = step;
         this.statDeliveredCount = delivered;
         this.statTotalPallets   = total;
         this.statTotalTime      = totalTime;
         this.statActiveRobots   = new CopyOnWriteArrayList<>(activeRobots);
         this.statDeliveredPkgs  = new CopyOnWriteArrayList<>(deliveredPkgs);
+        this.statRobotBatteries = new CopyOnWriteArrayList<>(robotBatteries);
     }
 
     // -------------------------------------------------------------------------
@@ -287,6 +292,7 @@ public class SimulatorGUI {
 
         Font plain = new Font("SansSerif", Font.PLAIN, 12);
         Font bold  = new Font("SansSerif", Font.BOLD,  12);
+        Font small = new Font("SansSerif", Font.PLAIN, 11);
 
         int y = 20;
 
@@ -297,6 +303,70 @@ public class SimulatorGUI {
         y += lh;
         g.drawString("Delivered: " + statDeliveredCount + " / " + statTotalPallets, mx, y);
         y += lh + 10;
+
+        // Robot Battery Status Section
+        List<int[]> batteries = statRobotBatteries;
+        g.setFont(bold);
+        g.setColor(Color.DARK_GRAY);
+        g.drawString("Robot Fleet (" + batteries.size() + "):", mx, y);
+        y += lh;
+
+        g.setFont(small);
+        if (batteries.isEmpty()) {
+            g.setColor(Color.GRAY);
+            g.drawString("  no robots yet", mx, y);
+            y += lh;
+        } else {
+            for (int[] bat : batteries) {
+                int robotId = bat[0];
+                int battery = bat[1];
+                int maxBattery = bat[2];
+                int batteryPercent = maxBattery > 0 ? (battery * 100) / maxBattery : 0;
+
+                // Determine battery color based on level
+                Color batteryColor;
+                if (batteryPercent > 50) {
+                    batteryColor = new Color(40, 160, 40);  // Green
+                } else if (batteryPercent > 25) {
+                    batteryColor = new Color(220, 160, 20); // Orange
+                } else {
+                    batteryColor = new Color(200, 40, 40);  // Red
+                }
+
+                // Draw robot name
+                g.setColor(Color.DARK_GRAY);
+                g.drawString("  Robot #" + robotId + ":", mx, y);
+
+                // Draw battery bar
+                int barX = mx + 90;
+                int barY = y - 10;
+                int barWidth = 100;
+                int barHeight = 12;
+
+                // Background (empty battery)
+                g.setColor(new Color(220, 220, 220));
+                g.fillRect(barX, barY, barWidth, barHeight);
+
+                // Battery fill
+                int fillWidth = (battery * barWidth) / Math.max(1, maxBattery);
+                g.setColor(batteryColor);
+                g.fillRect(barX, barY, fillWidth, barHeight);
+
+                // Border
+                g.setColor(Color.GRAY);
+                g.drawRect(barX, barY, barWidth, barHeight);
+
+                // Percentage text
+                g.setColor(Color.DARK_GRAY);
+                g.setFont(new Font("SansSerif", Font.BOLD, 10));
+                String batteryText = battery + "/" + maxBattery + " (" + batteryPercent + "%)";
+                g.drawString(batteryText, barX + barWidth + 5, y);
+                g.setFont(small);
+
+                y += lh;
+            }
+        }
+        y += 10;
 
         // Active robots
         List<int[]> active = statActiveRobots;

@@ -472,13 +472,24 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             });
         }
 
+        // Prepare battery statistics for all robots
+        List<int[]> batteryStats = new ArrayList<>();
+        for (DeliveryBot robot : robotManager.getActiveFleet()) {
+            batteryStats.add(new int[]{
+                robot.getId(),
+                robot.getBatteryLevel(),
+                robot.getMaxBattery()
+            });
+        }
+
         displayWindow.updateStats(
             step,
             performanceTracker.getCompletedCount(),
             totalPackages,
             performanceTracker.getTotalDeliveryTime(),
             activeStats,
-            performanceTracker.getHistoryAsArrays()
+            performanceTracker.getHistoryAsArrays(),
+            batteryStats
         );
 
         displayWindow.refresh();
