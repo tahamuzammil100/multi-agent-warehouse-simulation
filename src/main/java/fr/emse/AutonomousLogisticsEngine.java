@@ -482,6 +482,12 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             });
         }
 
+        // Prepare extended metrics {minTime, maxTime, avgTime * 10}
+        int minTime = performanceTracker.getMinDeliveryTime();
+        int maxTime = performanceTracker.getMaxDeliveryTime();
+        int avgTimeX10 = (int) (performanceTracker.getAverageDeliveryTime() * 10);
+        int[] extendedMetrics = {minTime, maxTime, avgTimeX10};
+
         displayWindow.updateStats(
             step,
             performanceTracker.getCompletedCount(),
@@ -489,7 +495,8 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             performanceTracker.getTotalDeliveryTime(),
             activeStats,
             performanceTracker.getHistoryAsArrays(),
-            batteryStats
+            batteryStats,
+            extendedMetrics
         );
 
         displayWindow.refresh();

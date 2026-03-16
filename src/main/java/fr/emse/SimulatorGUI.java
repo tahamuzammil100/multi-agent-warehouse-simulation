@@ -78,6 +78,8 @@ public class SimulatorGUI {
     private volatile List<int[]> statDeliveredPkgs = new CopyOnWriteArrayList<>();
     /** {robotId, batteryLevel, maxBattery} for each robot in the fleet. */
     private volatile List<int[]> statRobotBatteries = new CopyOnWriteArrayList<>();
+    /** {minTime, maxTime, avgTime} - extended metrics. */
+    private volatile int[] statExtendedMetrics = new int[3];
 
     private JFrame  frame;
     private JPanel  panel;
@@ -262,10 +264,11 @@ public class SimulatorGUI {
      * @param activeRobots  list of int[]{palletId, zone, stepsInTransit}
      * @param deliveredPkgs list of int[]{palletId, zone, deliverySteps} (all delivered so far)
      * @param robotBatteries list of int[]{robotId, batteryLevel, maxBattery} for all robots
+     * @param extendedMetrics array of {minTime, maxTime, avgTime}
      */
     public void updateStats(int step, int delivered, int total, long totalTime,
                             List<int[]> activeRobots, List<int[]> deliveredPkgs,
-                            List<int[]> robotBatteries) {
+                            List<int[]> robotBatteries, int[] extendedMetrics) {
         this.statStep           = step;
         this.statDeliveredCount = delivered;
         this.statTotalPallets   = total;
@@ -273,6 +276,7 @@ public class SimulatorGUI {
         this.statActiveRobots   = new CopyOnWriteArrayList<>(activeRobots);
         this.statDeliveredPkgs  = new CopyOnWriteArrayList<>(deliveredPkgs);
         this.statRobotBatteries = new CopyOnWriteArrayList<>(robotBatteries);
+        this.statExtendedMetrics = extendedMetrics != null ? extendedMetrics.clone() : new int[3];
     }
 
     // -------------------------------------------------------------------------
@@ -284,38 +288,43 @@ public class SimulatorGUI {
 
         int w  = statsPanel.getWidth();
         int h  = statsPanel.getHeight();
-        int lh = 18;
-        int mx = 10;
+        int mx = 12;
 
-        g.setColor(Color.WHITE);
+        // Background
+        g.setColor(new Color(250, 250, 252));
         g.fillRect(0, 0, w, h);
 
-        Font plain = new Font("SansSerif", Font.PLAIN, 12);
-        Font bold  = new Font("SansSerif", Font.BOLD,  12);
-        Font small = new Font("SansSerif", Font.PLAIN, 11);
+        Font titleFont = new Font("SansSerif", Font.BOLD, 14);
+        Font labelFont = new Font("SansSerif", Font.PLAIN, 12);
+        Font valueFont = new Font("SansSerif", Font.BOLD, 13);
+        Font smallFont = new Font("SansSerif", Font.PLAIN, 10);
 
-        int y = 20;
+        int y = 15;
 
-        // Step & delivered
-        g.setFont(bold);
-        g.setColor(Color.DARK_GRAY);
-        g.drawString("Step: " + statStep, mx, y);
-        y += lh;
-        g.drawString("Delivered: " + statDeliveredCount + " / " + statTotalPallets, mx, y);
-        y += lh + 10;
+        // ========== HEADER SECTION ==========
+        drawSectionHeader(g, "SIMULATION STATUS", mx, y, w - 24, titleFont);
+        y += 30;
 
-        // Robot Battery Status Section
+        // Current step with icon
+        drawMetricRow(g, "⏱", "Step", String.valueOf(statStep), mx, y, labelFont, valueFont);
+        y += 25;
+
+        // Delivery progress with icon
+        double progress = statTotalPallets > 0 ? (statDeliveredCount * 100.0) / statTotalPallets : 0;
+        drawMetricRow(g, "📦", "Delivered", statDeliveredCount + " / " + statTotalPallets +
+                      String.format(" (%.0f%%)", progress), mx, y, labelFont, valueFont);
+        y += 30;
+
+        // ========== ROBOT FLEET SECTION ==========
         List<int[]> batteries = statRobotBatteries;
-        g.setFont(bold);
-        g.setColor(Color.DARK_GRAY);
-        g.drawString("Robot Fleet (" + batteries.size() + "):", mx, y);
-        y += lh;
+        drawSectionHeader(g, "ROBOT FLEET", mx, y, w - 24, titleFont);
+        y += 30;
 
-        g.setFont(small);
         if (batteries.isEmpty()) {
+            g.setFont(labelFont);
             g.setColor(Color.GRAY);
-            g.drawString("  no robots yet", mx, y);
-            y += lh;
+            g.drawString("No robots active", mx + 8, y);
+            y += 25;
         } else {
             for (int[] bat : batteries) {
                 int robotId = bat[0];
@@ -323,108 +332,208 @@ public class SimulatorGUI {
                 int maxBattery = bat[2];
                 int batteryPercent = maxBattery > 0 ? (battery * 100) / maxBattery : 0;
 
-                // Determine battery color based on level
-                Color batteryColor;
-                if (batteryPercent > 50) {
-                    batteryColor = new Color(40, 160, 40);  // Green
-                } else if (batteryPercent > 25) {
-                    batteryColor = new Color(220, 160, 20); // Orange
-                } else {
-                    batteryColor = new Color(200, 40, 40);  // Red
-                }
-
-                // Draw robot name
-                g.setColor(Color.DARK_GRAY);
-                g.drawString("  Robot #" + robotId + ":", mx, y);
-
-                // Draw battery bar
-                int barX = mx + 90;
-                int barY = y - 10;
-                int barWidth = 100;
-                int barHeight = 12;
-
-                // Background (empty battery)
-                g.setColor(new Color(220, 220, 220));
-                g.fillRect(barX, barY, barWidth, barHeight);
-
-                // Battery fill
-                int fillWidth = (battery * barWidth) / Math.max(1, maxBattery);
-                g.setColor(batteryColor);
-                g.fillRect(barX, barY, fillWidth, barHeight);
-
-                // Border
-                g.setColor(Color.GRAY);
-                g.drawRect(barX, barY, barWidth, barHeight);
-
-                // Percentage text
-                g.setColor(Color.DARK_GRAY);
-                g.setFont(new Font("SansSerif", Font.BOLD, 10));
-                String batteryText = battery + "/" + maxBattery + " (" + batteryPercent + "%)";
-                g.drawString(batteryText, barX + barWidth + 5, y);
-                g.setFont(small);
-
-                y += lh;
+                y = drawRobotCard(g, robotId, battery, maxBattery, batteryPercent, mx, y, w - 24,
+                                  labelFont, valueFont, smallFont);
+                y += 8; // Spacing between cards
             }
         }
-        y += 10;
+        y += 15;
 
-        // Active robots
+        // ========== ACTIVE DELIVERIES SECTION ==========
         List<int[]> active = statActiveRobots;
-        g.setFont(bold);
-        g.setColor(Color.DARK_GRAY);
-        g.drawString("Active (" + active.size() + "):", mx, y);
-        y += lh;
+        if (!active.isEmpty()) {
+            drawSectionHeader(g, "ACTIVE DELIVERIES", mx, y, w - 24, titleFont);
+            y += 28;
 
-        g.setFont(plain);
-        if (active.isEmpty()) {
-            g.setColor(Color.GRAY);
-            g.drawString("  none", mx, y);
-            y += lh;
-        } else {
             for (int[] r : active) {
-                g.setColor(Color.DARK_GRAY);
-                g.drawString("  Pallet #" + r[0] + " (Z" + r[1] + "): " + r[2] + " steps", mx, y);
-                y += lh;
+                y = drawActiveDeliveryCard(g, r[0], r[1], r[2], mx, y, w - 24, labelFont, smallFont);
+                y += 6;
             }
+            y += 10;
         }
-        y += 10;
 
-        // Delivered packages
-        List<int[]> delivered = statDeliveredPkgs;
-        g.setFont(bold);
-        g.setColor(Color.DARK_GRAY);
-        g.drawString("Delivered (" + delivered.size() + "):", mx, y);
-        y += lh;
+        // ========== PERFORMANCE METRICS (Bottom) ==========
+        int footerY = h - 110;
+        drawSectionHeader(g, "PERFORMANCE", mx, footerY, w - 24, titleFont);
+        footerY += 28;
 
-        g.setFont(plain);
-        if (delivered.isEmpty()) {
-            g.setColor(Color.GRAY);
-            g.drawString("  none yet", mx, y);
-            y += lh;
+        // Extract metrics
+        int minTime = statExtendedMetrics[0];
+        int maxTime = statExtendedMetrics[1];
+        double avgTime = statExtendedMetrics[2] / 10.0; // Stored as integer * 10
+
+        if (statDeliveredCount > 0) {
+            // Average delivery time
+            drawMetricRow(g, "📊", "Avg", String.format("%.1f steps", avgTime), mx, footerY, labelFont, valueFont);
+            footerY += 22;
+
+            // Min/Max delivery times
+            g.setFont(labelFont);
+            g.setColor(new Color(90, 90, 90));
+            g.drawString("⚡ Best:", mx + 25, footerY);
+            g.setFont(valueFont);
+            g.setColor(new Color(76, 175, 80)); // Green
+            g.drawString(minTime + " steps", mx + 90, footerY);
+            footerY += 22;
+
+            g.setFont(labelFont);
+            g.setColor(new Color(90, 90, 90));
+            g.drawString("🐌 Worst:", mx + 25, footerY);
+            g.setFont(valueFont);
+            g.setColor(new Color(244, 67, 54)); // Red
+            g.drawString(maxTime + " steps", mx + 90, footerY);
         } else {
-            int footerH = 50;
-            int maxRows = Math.max(1, (h - y - footerH) / lh);
-            int start   = Math.max(0, delivered.size() - maxRows);
-            if (start > 0) {
-                g.setColor(Color.GRAY);
-                g.drawString("  +" + start + " earlier…", mx, y);
-                y += lh;
-            }
-            for (int i = start; i < delivered.size(); i++) {
-                int[] d = delivered.get(i);
-                g.setColor(Color.DARK_GRAY);
-                g.drawString("  Pallet #" + d[0] + " (Z" + d[1] + "): " + d[2] + " steps", mx, y);
-                y += lh;
-            }
+            g.setFont(labelFont);
+            g.setColor(Color.GRAY);
+            g.drawString("No deliveries yet", mx + 8, footerY);
+        }
+    }
+
+    /**
+     * Draws a section header with underline
+     */
+    private void drawSectionHeader(Graphics2D g, String title, int x, int y, int width, Font font) {
+        g.setFont(font);
+        g.setColor(new Color(50, 50, 80));
+        g.drawString(title, x, y);
+
+        // Underline
+        g.setColor(new Color(100, 100, 180));
+        g.fillRect(x, y + 4, width, 2);
+    }
+
+    /**
+     * Draws a metric row with icon, label, and value
+     */
+    private void drawMetricRow(Graphics2D g, String icon, String label, String value,
+                               int x, int y, Font labelFont, Font valueFont) {
+        // Icon
+        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
+        g.setColor(new Color(80, 80, 120));
+        g.drawString(icon, x, y);
+
+        // Label
+        g.setFont(labelFont);
+        g.setColor(new Color(90, 90, 90));
+        g.drawString(label + ":", x + 25, y);
+
+        // Value
+        g.setFont(valueFont);
+        g.setColor(new Color(40, 40, 60));
+        g.drawString(value, x + 90, y);
+    }
+
+    /**
+     * Draws a robot status card with battery visualization
+     */
+    private int drawRobotCard(Graphics2D g, int robotId, int battery, int maxBattery,
+                              int batteryPercent, int x, int y, int cardWidth,
+                              Font labelFont, Font valueFont, Font smallFont) {
+        int cardHeight = 50;
+
+        // Card background with subtle shadow
+        g.setColor(new Color(230, 230, 235));
+        g.fillRoundRect(x + 2, y + 2, cardWidth, cardHeight, 8, 8);
+
+        g.setColor(Color.WHITE);
+        g.fillRoundRect(x, y, cardWidth, cardHeight, 8, 8);
+
+        // Card border
+        g.setColor(new Color(200, 200, 210));
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, cardWidth, cardHeight, 8, 8);
+        g.setStroke(new BasicStroke(1));
+
+        // Robot icon (circle with R)
+        int iconX = x + 10;
+        int iconY = y + 12;
+        int iconSize = 26;
+
+        Color robotColor = new Color(70, 130, 200);
+        g.setColor(robotColor);
+        g.fillOval(iconX, iconY, iconSize, iconSize);
+
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 14));
+        g.drawString("R", iconX + 9, iconY + 19);
+
+        // Robot ID
+        g.setFont(valueFont);
+        g.setColor(new Color(40, 40, 60));
+        g.drawString("Robot " + robotId, iconX + iconSize + 8, y + 18);
+
+        // Battery status text
+        g.setFont(smallFont);
+        g.setColor(new Color(100, 100, 100));
+        g.drawString(battery + " / " + maxBattery + " units", iconX + iconSize + 8, y + 32);
+
+        // Battery bar
+        int barX = x + 10;
+        int barY = y + cardHeight - 12;
+        int barWidth = cardWidth - 20;
+        int barHeight = 8;
+
+        // Determine battery color
+        Color batteryColor;
+        if (batteryPercent > 50) {
+            batteryColor = new Color(76, 175, 80);  // Green
+        } else if (batteryPercent > 25) {
+            batteryColor = new Color(255, 152, 0);  // Orange
+        } else {
+            batteryColor = new Color(244, 67, 54);  // Red
         }
 
-        // Overall (pinned to bottom)
-        int oy = h - 40;
-        double avg = statDeliveredCount > 0 ? (double) statTotalTime / statDeliveredCount : 0.0;
-        g.setFont(bold);
+        // Battery bar background
+        g.setColor(new Color(230, 230, 230));
+        g.fillRoundRect(barX, barY, barWidth, barHeight, 4, 4);
+
+        // Battery fill
+        int fillWidth = (battery * barWidth) / Math.max(1, maxBattery);
+        g.setColor(batteryColor);
+        g.fillRoundRect(barX, barY, fillWidth, barHeight, 4, 4);
+
+        // Battery percentage text on the bar
+        g.setFont(new Font("SansSerif", Font.BOLD, 9));
         g.setColor(Color.DARK_GRAY);
-        g.drawString("Total: " + statTotalTime + " steps", mx, oy);
-        g.drawString(String.format("Avg: %.1f steps/pkg", avg), mx, oy + lh);
+        String percentText = batteryPercent + "%";
+        int textWidth = g.getFontMetrics().stringWidth(percentText);
+        g.drawString(percentText, barX + barWidth - textWidth - 3, barY + 7);
+
+        return y + cardHeight;
+    }
+
+    /**
+     * Draws an active delivery card
+     */
+    private int drawActiveDeliveryCard(Graphics2D g, int palletId, int zone, int steps,
+                                       int x, int y, int cardWidth, Font labelFont, Font smallFont) {
+        int cardHeight = 28;
+
+        // Card background
+        g.setColor(new Color(255, 248, 225));
+        g.fillRoundRect(x, y, cardWidth, cardHeight, 6, 6);
+
+        // Border
+        g.setColor(new Color(255, 193, 7));
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, cardWidth, cardHeight, 6, 6);
+        g.setStroke(new BasicStroke(1));
+
+        // Icon
+        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        g.setColor(new Color(230, 126, 34));
+        g.drawString("📦", x + 8, y + 18);
+
+        // Text
+        g.setFont(labelFont);
+        g.setColor(new Color(60, 60, 60));
+        g.drawString("Pallet " + palletId, x + 30, y + 13);
+
+        g.setFont(smallFont);
+        g.setColor(new Color(100, 100, 100));
+        g.drawString("Zone " + zone + " • " + steps + " steps", x + 30, y + 23);
+
+        return y + cardHeight;
     }
 
     // -------------------------------------------------------------------------

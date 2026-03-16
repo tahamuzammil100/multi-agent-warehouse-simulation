@@ -70,6 +70,52 @@ public class DeliveryMetrics {
     }
 
     /**
+     * Gets the minimum delivery time across all completed deliveries.
+     * @return Minimum time in steps, or 0 if no deliveries completed
+     */
+    public int getMinDeliveryTime() {
+        if (completionHistory.isEmpty()) {
+            return 0;
+        }
+        int min = Integer.MAX_VALUE;
+        for (DeliveryRecord record : completionHistory) {
+            if (record.elapsedTime < min) {
+                min = record.elapsedTime;
+            }
+        }
+        return min;
+    }
+
+    /**
+     * Gets the maximum delivery time across all completed deliveries.
+     * @return Maximum time in steps, or 0 if no deliveries completed
+     */
+    public int getMaxDeliveryTime() {
+        if (completionHistory.isEmpty()) {
+            return 0;
+        }
+        int max = 0;
+        for (DeliveryRecord record : completionHistory) {
+            if (record.elapsedTime > max) {
+                max = record.elapsedTime;
+            }
+        }
+        return max;
+    }
+
+    /**
+     * Calculates the success rate as a percentage.
+     * @param totalExpected Total packages expected to be delivered
+     * @return Success rate (0-100)
+     */
+    public double getSuccessRate(int totalExpected) {
+        if (totalExpected == 0) {
+            return 0.0;
+        }
+        return (completedDeliveries * 100.0) / totalExpected;
+    }
+
+    /**
      * Gets all delivery completion records.
      * @return List of delivery records
      */
