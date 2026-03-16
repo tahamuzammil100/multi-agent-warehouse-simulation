@@ -9,12 +9,6 @@ import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
 /**
  * RobotFactory - Handles creation and lifecycle management of delivery robots.
- *
- * Manages:
- * - Robot instantiation with proper configuration
- * - Active robot tracking
- * - Robot ID assignment
- * - Spawn point availability checking
  */
 public class RobotFactory {
 
@@ -25,23 +19,18 @@ public class RobotFactory {
     private final int gridRows;
     private final int gridColumns;
     private final Color robotColor;
+    private final int maxRobots;
+    private final int batteryAutonomy;
+    private final int rechargeTime;
+    private final int chargeThreshold;
 
     private final List<DeliveryBot> activeFleet;
     private int nextRobotId;
 
-    /**
-     * Constructs a robot factory with environment configuration.
-     *
-     * @param env Grid environment
-     * @param zones Zone coordinate registry
-     * @param fieldOfView Robot perception range
-     * @param debug Debug output level
-     * @param rows Grid row count
-     * @param cols Grid column count
-     * @param color Robot display color
-     */
     public RobotFactory(ColorGridEnvironment env, ZoneCoordinates zones,
-                       int fieldOfView, int debug, int rows, int cols, Color color) {
+                       int fieldOfView, int debug, int rows, int cols, Color color,
+                       int maxRobots, int batteryAutonomy, int rechargeTime,
+                       int chargeThreshold) {
         this.environment = env;
         this.zones = zones;
         this.fieldOfView = fieldOfView;
@@ -49,113 +38,87 @@ public class RobotFactory {
         this.gridRows = rows;
         this.gridColumns = cols;
         this.robotColor = color;
+        this.maxRobots = Math.max(1, maxRobots);
+        this.batteryAutonomy = Math.max(1, batteryAutonomy);
+        this.rechargeTime = Math.max(1, rechargeTime);
+        this.chargeThreshold = Math.max(0, chargeThreshold);
         this.activeFleet = new ArrayList<>();
         this.nextRobotId = 0;
     }
 
-    /**
-     * Attempts to spawn a robot for a package if spawn point is available.
-     *
-     * @param pkg Package requiring robot assignment
-     * @return Newly created robot, or null if spawn blocked
-     */
-    public DeliveryBot trySpawnRobot(PackageItem pkg) {
+    public DeliveryBot trySpawnRobot(PackageItem pkg, int[] pickup, int[] dropoff) {
         int zoneNumber = pkg.targetZone;
-        int[] spawnPoint = zones.getRobotSpawn(zoneNumber);
 
-        // Check if spawn location is available
+        // Reuse an idle robot first (persistent AMR behavior).
+        for (DeliveryBot robot : activeFleet) {
+            if (robot.isIdle()) {
+                robot.assignMission(pkg, pickup, dropoff);
+                return robot;
+            }
+        }
+
+        int[] spawnPoint = zones.getRobotSpawn(zoneNumber);
+        if (activeFleet.size() >= maxRobots) {
+            return null;
+        }
         if (!isLocationAvailable(spawnPoint)) {
             return null;
         }
 
-        // Create robot with full mission parameters
-        DeliveryBot robot = buildRobot(pkg, zoneNumber, spawnPoint);
-
-        // Register in active fleet
-        activeFleet.add(robot);
-
-        return robot;
-    }
-
-    /**
-     * Constructs a fully configured delivery robot.
-     *
-     * @param pkg Package to deliver
-     * @param zone Target zone number
-     * @param spawn Spawn coordinates
-     * @return Configured robot instance
-     */
-    private DeliveryBot buildRobot(PackageItem pkg, int zone, int[] spawn) {
-        int[] waypoint = zones.getWaypoint(zone);
-        int[] target = zones.getDeliveryTarget(zone);
-        int[] exit = zones.getExit(zone);
-
-        return new DeliveryBot(
+        DeliveryBot robot = new DeliveryBot(
             generateRobotName(),
             fieldOfView,
             debugLevel,
-            spawn,
+            spawnPoint,
             robotColor,
             gridRows,
             gridColumns,
             environment,
             pkg,
-            pkg.arrivalPosition,
-            waypoint,
-            target,
-            exit
+            pickup,
+            dropoff,
+            batteryAutonomy,
+            rechargeTime,
+            chargeThreshold
         );
+
+        activeFleet.add(robot);
+        return robot;
     }
 
-    /**
-     * Generates unique robot identifier.
-     * @return Robot name string
-     */
     private String generateRobotName() {
         return "Robot" + nextRobotId++;
     }
 
-    /**
-     * Checks if a grid location is unoccupied.
-     *
-     * @param coordinates Position to check
-     * @return true if cell is empty
-     */
     private boolean isLocationAvailable(int[] coordinates) {
         ColorSimpleCell[][] grid = (ColorSimpleCell[][]) environment.getGrid();
         ColorSimpleCell cell = grid[coordinates[0]][coordinates[1]];
         return cell == null || cell.getContent() == null;
     }
 
-    /**
-     * Removes a robot from the active fleet.
-     * @param robot Robot to remove
-     */
-    public void decommissionRobot(DeliveryBot robot) {
-        activeFleet.remove(robot);
-    }
-
-    /**
-     * Gets all currently active robots.
-     * @return List of active robots
-     */
     public List<DeliveryBot> getActiveFleet() {
         return activeFleet;
     }
 
-    /**
-     * Gets count of active robots.
-     * @return Number of robots currently operating
-     */
     public int getActiveCount() {
         return activeFleet.size();
     }
 
-    /**
-     * Checks if any robots are still active.
-     * @return true if fleet has active robots
-     */
-    public boolean hasActiveRobots() {
-        return !activeFleet.isEmpty();
+    public int getBusyCount() {
+        int busy = 0;
+        for (DeliveryBot robot : activeFleet) {
+            if (!robot.isIdle()) {
+                busy++;
+            }
+        }
+        return busy;
+    }
+
+    public boolean hasBusyRobots() {
+        return getBusyCount() > 0;
+    }
+
+    public int getMaxRobots() {
+        return maxRobots;
     }
 }

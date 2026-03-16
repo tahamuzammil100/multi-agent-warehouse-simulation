@@ -46,6 +46,8 @@ public class SimulatorGUI {
 
     /** Each entry: {minRow, minCol, maxRow, maxCol} — drawn as semi-transparent yellow rect. */
     private final int[][] yellowZones;
+    /** Each entry: {minRow, minCol, maxRow, maxCol} — drawn as cyan recharge zone. */
+    private final int[][] rechargeZones;
 
     /** Per-row background colour for the right panel (cols 18-19). Length == grid rows. */
     private final Color[] rowRightColors;
@@ -99,6 +101,7 @@ public class SimulatorGUI {
                         int cellSize, String title,
                         int[][] ovalZones,
                         int[][] yellowZones,
+                        int[][] rechargeZones,
                         Color[] rowRightColors,
                         int[] separatorRows,
                         int[][] exitCells,
@@ -108,6 +111,7 @@ public class SimulatorGUI {
         this.grid           = grid;
         this.ovalZones      = ovalZones      != null ? ovalZones      : new int[0][];
         this.yellowZones    = yellowZones    != null ? yellowZones    : new int[0][];
+        this.rechargeZones  = rechargeZones  != null ? rechargeZones  : new int[0][];
         this.rowRightColors = rowRightColors != null ? rowRightColors : new Color[0];
         this.separatorRows  = separatorRows  != null ? separatorRows  : new int[0];
         this.exitCells      = exitCells      != null ? exitCells      : new int[0][];
@@ -387,12 +391,36 @@ public class SimulatorGUI {
         }
         g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
 
-        // --- Pass 3: hatched red rectangular zones ---------------------------
+        // --- Pass 3: recharge zones (semi-transparent cyan) ------------------
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.60f));
+        g.setColor(new Color(120, 220, 240));
+        for (int[] z : rechargeZones) {
+            int px = z[1] * cellSize, py = z[0] * cellSize;
+            int w  = (z[3] - z[1] + 1) * cellSize;
+            int h  = (z[2] - z[0] + 1) * cellSize;
+            g.fillRect(px, py, w, h);
+        }
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
+        g.setColor(new Color(20, 110, 130));
+        g.setStroke(new BasicStroke(2f));
+        for (int[] z : rechargeZones) {
+            int px = z[1] * cellSize, py = z[0] * cellSize;
+            int w  = (z[3] - z[1] + 1) * cellSize;
+            int h  = (z[2] - z[0] + 1) * cellSize;
+            g.drawRect(px + 1, py + 1, Math.max(1, w - 2), Math.max(1, h - 2));
+            g.setColor(new Color(15, 90, 110));
+            g.setFont(new Font("SansSerif", Font.BOLD, Math.max(10, cellSize / 3)));
+            g.drawString("CHG", px + 4, py + Math.max(14, cellSize / 2));
+            g.setColor(new Color(20, 110, 130));
+        }
+        g.setStroke(new BasicStroke(1));
+
+        // --- Pass 4: hatched red rectangular zones ---------------------------
         for (int[] z : ovalZones) {
             drawHatchedRect(g, z[0], z[1], z[2], z[3]);
         }
 
-        // --- Pass 4: exit markers --------------------------------------------
+        // --- Pass 5: exit markers --------------------------------------------
         for (int[] exit : exitCells) {
             if (exit == null || exit.length < 2) continue;
             int row = exit[0];
@@ -410,7 +438,7 @@ public class SimulatorGUI {
             g.setStroke(new BasicStroke(1));
         }
 
-        // --- Pass 5: grid lines ----------------------------------------------
+        // --- Pass 6: grid lines ----------------------------------------------
         if (showGrid) {
             g.setColor(GRID_LINE);
             g.setStroke(new BasicStroke(1));
@@ -421,7 +449,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 6: thick separator lines on right panel --------------------
+        // --- Pass 7: thick separator lines on right panel --------------------
         g.setColor(Color.BLACK);
         g.setStroke(new BasicStroke(lineStroke));
         for (int sep : separatorRows) {
@@ -430,7 +458,7 @@ public class SimulatorGUI {
         }
         g.setStroke(new BasicStroke(1));
 
-        // --- Pass 7: waiting packages ----------------------------------------
+        // --- Pass 8: waiting packages ----------------------------------------
         Map<String, Color> overlay = packageOverlay;
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
@@ -454,7 +482,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 8: content (obstacles, robots, humans) ---------------------
+        // --- Pass 9: content (obstacles, robots, humans) ---------------------
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int px = c * cellSize, py = r * cellSize;
@@ -467,7 +495,7 @@ public class SimulatorGUI {
             }
         }
 
-        // --- Pass 9: border wall (thick black outline with entry/exit gaps) --
+        // --- Pass 10: border wall (thick black outline with entry/exit gaps) -
         int W = cols * cellSize;
         int H = rows * cellSize;
         g.setColor(Color.BLACK);

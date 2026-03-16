@@ -10,6 +10,7 @@ import org.ini4j.Ini;
 import fr.emse.fayol.maqit.simulator.SimFactory;
 import fr.emse.fayol.maqit.simulator.configuration.IniFile;
 import fr.emse.fayol.maqit.simulator.configuration.SimProperties;
+import fr.emse.fayol.maqit.simulator.components.Message;
 import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.components.ColorSituatedComponent;
 import fr.emse.fayol.maqit.simulator.environment.ColorGridEnvironment;
@@ -36,6 +37,8 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
     private final ZoneCoordinates zoneLayout;
     private final PackageScheduler packageManager;
     private final RobotFactory robotManager;
+    private final IntermediateStorageManager intermediateStorage;
+    private final RechargingAreaManager rechargingArea;
     private final DeliveryMetrics performanceTracker;
 
     // Human agents (warehouse workers)
@@ -47,6 +50,10 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
     // Configuration
     private final int totalPackages;
+    private final int maxRobots;
+    private final int batteryAutonomy;
+    private final int rechargeTimeSteps;
+    private final int chargeThreshold;
     private final float gridLineWidth;
     private final int cellPadding;
     private final boolean gridVisible;
@@ -56,27 +63,44 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
      *
      * @param properties Simulation parameters
      * @param packageCount Number of packages to process
+     * @param maxRobotCount Maximum number of delivery robots in the fleet
+     * @param batteryAutonomy Maximum battery autonomy in movement steps
+     * @param rechargeTime Recharge duration (steps) once in charging area
+     * @param chargeThreshold Battery threshold to trigger charging diversion
      * @param lineWidth Grid line thickness
      * @param padding Cell padding in pixels
      * @param showGrid Whether to display grid lines
      */
     public AutonomousLogisticsEngine(SimProperties properties, int packageCount,
+                                     int maxRobotCount,
+                                     int batteryAutonomy, int rechargeTime, int chargeThreshold,
                                      float lineWidth, int padding, boolean showGrid) {
         super(properties);
         this.totalPackages = packageCount;
+        this.maxRobots = Math.max(1, maxRobotCount);
+        this.batteryAutonomy = Math.max(1, batteryAutonomy);
+        this.rechargeTimeSteps = Math.max(1, rechargeTime);
+        this.chargeThreshold = Math.max(0, chargeThreshold);
         this.gridLineWidth = lineWidth;
         this.cellPadding = padding;
         this.gridVisible = showGrid;
 
         // Initialize subsystems
         this.zoneLayout = new ZoneCoordinates("configuration.ini");
+        this.intermediateStorage = new IntermediateStorageManager(
+            zoneLayout.getIntermediateArea(1),
+            zoneLayout.getIntermediateArea(2),
+            zoneLayout.getIntermediateCapacityRatio()
+        );
+        this.rechargingArea = new RechargingAreaManager(zoneLayout.getRechargeArea());
         this.packageManager = new PackageScheduler(
             packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed
         );
         this.robotManager = new RobotFactory(
             null,  // Will be set after environment creation
             zoneLayout, properties.field, properties.debug,
-            properties.rows, properties.columns, properties.colorrobot
+            properties.rows, properties.columns, properties.colorrobot,
+            this.maxRobots, this.batteryAutonomy, this.rechargeTimeSteps, this.chargeThreshold
         );
         this.performanceTracker = new DeliveryMetrics();
 
@@ -177,7 +201,10 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             // Phase 4: Execute robot deliveries and handle transitions
             processDeliveryRobots(step);
 
-            // Phase 5: Update visual display
+            // Phase 5: Relay AMR-to-AMR messages (dyadic and broadcast)
+            relayRobotMessages();
+
+            // Phase 6: Update visual display
             refreshDisplay(step);
 
             // Pause for visualization
@@ -211,10 +238,28 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         List<PackageItem> pending = new ArrayList<>(packageManager.getPendingPackages());
 
         for (PackageItem pkg : pending) {
-            DeliveryBot robot = robotManager.trySpawnRobot(pkg);
+            int[] pickup = null;
+            int[] dropoff = null;
+
+            if (pkg.getStage() == PackageItem.Stage.WAITING_AT_GATE) {
+                pickup = pkg.arrivalPosition;
+                dropoff = zoneLayout.getDeliveryTarget(pkg.targetZone);
+            } else if (pkg.getStage() == PackageItem.Stage.STORED_IN_INTERMEDIATE) {
+                pickup = pkg.getIntermediateSlot();
+                if (pickup == null) {
+                    continue;
+                }
+                dropoff = zoneLayout.getDeliveryTarget(pkg.targetZone);
+            } else {
+                continue;
+            }
+
+            DeliveryBot robot = robotManager.trySpawnRobot(pkg, pickup, dropoff);
 
             if (robot != null) {
-                placeComponent(robot);
+                if (!isRobotAlreadyPlaced(robot)) {
+                    placeComponent(robot);
+                }
                 packageManager.markAsAssigned(pkg);
                 System.out.println("  [SPAWN] Robot#" + robot.getId() + " for " + pkg);
             }
@@ -246,6 +291,32 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         List<DeliveryBot> robots = new ArrayList<>(robotManager.getActiveFleet());
 
         for (DeliveryBot robot : robots) {
+            if (robot.needsRecharge()) {
+                if (robot.isCarryingPackage() && !robot.isDropForChargeMission()) {
+                    PackageItem pkg = robot.getPackage();
+                    if (pkg != null && pkg.getStage() == PackageItem.Stage.WAITING_AT_GATE) {
+                        int[] dropSlot = pkg.getIntermediateSlot();
+                        if (dropSlot == null) {
+                            dropSlot = intermediateStorage.reserveSlot(pkg.targetZone);
+                            if (dropSlot != null) {
+                                pkg.setIntermediateSlot(dropSlot);
+                            }
+                        }
+                        if (dropSlot != null && robot.scheduleIntermediateDropForCharging(dropSlot)) {
+                            System.out.printf("  [DROP-FOR-CHARGE] Robot#%d -> [%d,%d] for %s%n",
+                                    robot.getId(), dropSlot[0], dropSlot[1], pkg);
+                        }
+                    }
+                } else if (!robot.isDropForChargeMission()) {
+                    int[] chargeSpot = rechargingArea.reserveSpot();
+                    if (chargeSpot != null) {
+                        robot.redirectToCharge(chargeSpot);
+                        System.out.printf("  [CHARGE-START] Robot#%d -> [%d,%d]%n",
+                                robot.getId(), chargeSpot[0], chargeSpot[1]);
+                    }
+                }
+            }
+
             DeliveryMission.Phase phaseBefore = robot.getMissionPhase();
             int[] previousPos = robot.getLocation();
 
@@ -264,6 +335,51 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
             // Handle phase transitions
             handlePhaseTransition(robot, phaseBefore, phaseAfter, step);
+
+            int[] releasedSpot = robot.consumeChargeSpotToRelease();
+            if (releasedSpot != null) {
+                rechargingArea.releaseSpot(releasedSpot);
+                System.out.printf("  [CHARGE-DONE] Robot#%d at [%d,%d]%n",
+                        robot.getId(), releasedSpot[0], releasedSpot[1]);
+            }
+        }
+    }
+
+    /**
+     * Relays messages sent by robots to other robots.
+     *
+     * This method is only a communication medium. Decision logic remains
+     * fully decentralized inside each robot.
+     */
+    private void relayRobotMessages() {
+        List<DeliveryBot> robots = new ArrayList<>(robotManager.getActiveFleet());
+        Map<Integer, DeliveryBot> byId = new HashMap<>();
+        for (DeliveryBot robot : robots) {
+            byId.put(robot.getId(), robot);
+        }
+
+        for (DeliveryBot sender : robots) {
+            List<Message> outgoing = sender.popSentMessages();
+            for (Message msg : outgoing) {
+                int receiver = msg.getReceiver();
+                if (receiver < 0) {
+                    for (DeliveryBot target : robots) {
+                        if (target.getId() == sender.getId()) {
+                            continue;
+                        }
+                        Message copy = new Message(msg.getEmitter(), msg.getContent());
+                        copy.setReceiver(target.getId());
+                        target.receiveMessage(copy);
+                    }
+                } else {
+                    DeliveryBot target = byId.get(receiver);
+                    if (target != null && target.getId() != sender.getId()) {
+                        Message copy = new Message(msg.getEmitter(), msg.getContent());
+                        copy.setReceiver(target.getId());
+                        target.receiveMessage(copy);
+                    }
+                }
+            }
         }
     }
 
@@ -276,29 +392,64 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
                                       int step) {
         // Package picked up
         if (before == DeliveryMission.Phase.PICKUP &&
-            after == DeliveryMission.Phase.CHECKPOINT) {
-            packageVisuals.remove(positionKey(robot.getPackage().arrivalPosition));
+            after == DeliveryMission.Phase.DROPOFF) {
+            PackageItem pkg = robot.getPackage();
+            if (pkg.getStage() == PackageItem.Stage.WAITING_AT_GATE) {
+                packageVisuals.remove(positionKey(pkg.arrivalPosition));
+            } else if (pkg.getStage() == PackageItem.Stage.STORED_IN_INTERMEDIATE) {
+                int[] slot = pkg.getIntermediateSlot();
+                if (slot != null) {
+                    packageVisuals.remove(positionKey(slot));
+                    intermediateStorage.releaseSlot(pkg.targetZone, slot);
+                    pkg.setIntermediateSlot(null);
+                }
+            }
             System.out.println("  [PICKUP] " + robot.getPackage() +
                              " by Robot#" + robot.getId());
         }
 
         // Package delivered
         if (before == DeliveryMission.Phase.DROPOFF &&
-            after == DeliveryMission.Phase.EXIT) {
-            int deliveryTime = step - robot.getPackage().spawnStep;
-            performanceTracker.recordDelivery(
-                robot.getPackage().packageId,
-                robot.getPackage().targetZone,
-                deliveryTime
-            );
-            System.out.printf("  [DELIVERY] %s by Robot#%d in %d steps%n",
-                            robot.getPackage(), robot.getId(), deliveryTime);
+            after == DeliveryMission.Phase.COMPLETED) {
+            PackageItem pkg = robot.getPackage();
+            boolean droppedForCharge = robot.consumeDropForChargeFlag();
+
+            if (droppedForCharge) {
+                pkg.markStoredInIntermediate();
+                int[] slot = pkg.getIntermediateSlot();
+                if (slot != null) {
+                    packageVisuals.put(positionKey(slot), pkg.displayColor);
+                    packageManager.enqueueForAssignment(pkg);
+                    System.out.printf("  [STORE-FOR-CHARGE] %s by Robot#%d at [%d,%d]%n",
+                            pkg, robot.getId(), slot[0], slot[1]);
+                }
+
+                robot.clearMission();
+                int[] chargeSpot = rechargingArea.reserveSpot();
+                if (chargeSpot != null) {
+                    robot.redirectToCharge(chargeSpot);
+                    System.out.printf("  [CHARGE-START] Robot#%d -> [%d,%d]%n",
+                            robot.getId(), chargeSpot[0], chargeSpot[1]);
+                }
+            } else {
+                pkg.markDelivered();
+                int deliveryTime = step - pkg.spawnStep;
+                performanceTracker.recordDelivery(
+                    pkg.packageId,
+                    pkg.targetZone,
+                    deliveryTime
+                );
+                System.out.printf("  [DELIVERY] %s by Robot#%d in %d steps%n",
+                        pkg, robot.getId(), deliveryTime);
+            }
         }
 
-        // Robot exited
-        if (after == DeliveryMission.Phase.COMPLETED) {
-            removeRobot(robot);
-            System.out.println("  [EXIT] Robot#" + robot.getId());
+        // Robot completed mission and becomes idle (persistent AMR)
+        if (before != DeliveryMission.Phase.COMPLETED &&
+            after == DeliveryMission.Phase.COMPLETED &&
+            !robot.isHeadingToCharge() && !robot.isCharging()) {
+            robot.clearMission();
+            System.out.println("  [IDLE] Robot#" + robot.getId());
         }
     }
 
@@ -311,6 +462,9 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         // Prepare active robot statistics
         List<int[]> activeStats = new ArrayList<>();
         for (DeliveryBot robot : robotManager.getActiveFleet()) {
+            if (robot.isIdle() || robot.getPackage() == null) {
+                continue;
+            }
             activeStats.add(new int[]{
                 robot.getPackage().packageId,
                 robot.getPackage().targetZone,
@@ -344,8 +498,11 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
         // Define waypoint zone visual areas
         int[][] waypointZones = {
-            {3, 11, 5, 12},   // Zone 1 waypoint
-            {9, 11, 11, 12}   // Zone 2 waypoint
+            zoneLayout.getIntermediateArea(1),
+            zoneLayout.getIntermediateArea(2)
+        };
+        int[][] rechargeZones = {
+            zoneLayout.getRechargeArea()
         };
 
         // Right panel coloring (columns 18-19)
@@ -371,7 +528,7 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             (ColorSimpleCell[][]) this.environment.getGrid(),
             this.sp.display_x, this.sp.display_y,
             cellSize, this.sp.display_title,
-            deliveryZones, waypointZones,
+            deliveryZones, waypointZones, rechargeZones,
             rightPanelColors, separators,
             exits,
             this.gridLineWidth, this.cellPadding, this.gridVisible
@@ -390,22 +547,11 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         this.environment.setCellContent(pos[0], pos[1], component);
     }
 
-    private void removeRobot(DeliveryBot robot) {
-        clearGridCell(robot.getLocation());
-        robotManager.decommissionRobot(robot);
-    }
-
-    private void clearGridCell(int[] position) {
-        try {
-            ColorSimpleCell[][] grid = (ColorSimpleCell[][]) this.environment.getGrid();
-            ColorSimpleCell cell = grid[position[0]][position[1]];
-            if (cell != null) {
-                java.lang.reflect.Field field = cell.getClass().getDeclaredField("content");
-                field.setAccessible(true);
-                field.set(cell, null);
-            }
-        } catch (ReflectiveOperationException ignored) {}
-        this.environment.removeCellContent(position[0], position[1]);
+    private boolean isRobotAlreadyPlaced(DeliveryBot robot) {
+        int[] pos = robot.getLocation();
+        ColorSimpleCell[][] grid = (ColorSimpleCell[][]) this.environment.getGrid();
+        ColorSimpleCell cell = grid[pos[0]][pos[1]];
+        return cell != null && cell.getContent() == robot;
     }
 
     private String positionKey(int[] pos) {
@@ -413,12 +559,21 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
     }
 
     private void logStepStatus(int step) {
-        System.out.printf("Step %d | Delivered: %d/%d | Active: %d | Pending: %d%n",
+        System.out.printf(
+                "Step %d | Delivered: %d/%d | Fleet: %d/%d | Busy: %d | Pending: %d | Storage Z1: %d/%d | Z2: %d/%d | Charging: %d/%d%n",
                         step,
                         performanceTracker.getCompletedCount(),
                         totalPackages,
                         robotManager.getActiveCount(),
-                        packageManager.getPendingPackages().size());
+                        robotManager.getMaxRobots(),
+                        robotManager.getBusyCount(),
+                        packageManager.getPendingPackages().size(),
+                        intermediateStorage.getOccupiedCount(1),
+                        intermediateStorage.getCapacity(1),
+                        intermediateStorage.getOccupiedCount(2),
+                        intermediateStorage.getCapacity(2),
+                        rechargingArea.getOccupiedCount(),
+                        rechargingArea.getCapacity());
     }
 
     private void pauseExecution() {
@@ -431,7 +586,7 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
     private boolean isOperationComplete() {
         return performanceTracker.getCompletedCount() >= totalPackages &&
-               !robotManager.hasActiveRobots() &&
+               !robotManager.hasBusyRobots() &&
                !packageManager.hasPendingPackages();
     }
 
@@ -445,6 +600,13 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
         Ini ini = new Ini(new File("configuration.ini"));
         int packageCount = Integer.parseInt(ini.get("warehouse", "total_pallets").trim());
+        String maxAmrValue = ini.get("warehouse", "max_amrs");
+        int maxRobotCount = (maxAmrValue == null || maxAmrValue.trim().isEmpty())
+                ? packageCount
+                : Integer.parseInt(maxAmrValue.trim());
+        int batteryAutonomy = Integer.parseInt(ini.get("warehouse", "battery_autonomy").trim());
+        int rechargeTime = Integer.parseInt(ini.get("warehouse", "recharge_time").trim());
+        int chargeThreshold = Integer.parseInt(ini.get("warehouse", "charge_threshold").trim());
         float lineWidth = Float.parseFloat(ini.get("warehouse", "line_stroke").trim());
         int padding = Integer.parseInt(ini.get("warehouse", "padding").trim());
         boolean showGrid = Integer.parseInt(ini.get("warehouse", "show_grid").trim()) != 0;
@@ -452,10 +614,16 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         System.out.println("=== Configuration ===");
         System.out.println("Grid dimensions: " + properties.rows + " × " + properties.columns);
         System.out.println("Packages to process: " + packageCount);
+        System.out.println("Max AMRs: " + maxRobotCount);
+        System.out.println("Battery autonomy: " + batteryAutonomy + " moves");
+        System.out.println("Recharge time: " + rechargeTime + " steps");
+        System.out.println("Charge threshold: " + chargeThreshold + " moves");
         System.out.println("Grid line width: " + lineWidth + "px");
 
         AutonomousLogisticsEngine engine = new AutonomousLogisticsEngine(
-            properties, packageCount, lineWidth, padding, showGrid
+            properties, packageCount, maxRobotCount,
+            batteryAutonomy, rechargeTime, chargeThreshold,
+            lineWidth, padding, showGrid
         );
 
         engine.createEnvironment();
