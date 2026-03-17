@@ -466,7 +466,12 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         if (before != DeliveryMission.Phase.COMPLETED &&
             after == DeliveryMission.Phase.COMPLETED &&
             !robot.isHeadingToCharge() && !robot.isCharging()) {
+            int[] posBeforeIdle = robot.getLocation().clone();
             robot.clearMission();
+            // Step one cell down so the exit lane stays clear for incoming robots
+            if (robot.stepToIdleCell()) {
+                updateEnvironment(posBeforeIdle, robot.getLocation(), robot.getId());
+            }
             System.out.println("  [IDLE] Robot#" + robot.getId());
         }
     }

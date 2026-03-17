@@ -358,6 +358,26 @@ public class DeliveryBot extends ColorInteractionRobot<ColorSimpleCell> {
         return maxBattery;
     }
 
+    /**
+     * Moves the robot one cell down to clear the exit lane for other robots.
+     * Called immediately after transitioning to IDLE so the exit position is freed.
+     *
+     * @return true if the robot successfully moved one step down
+     */
+    public boolean stepToIdleCell() {
+        int[] pos = getLocation();
+        ColorSimpleCell[][] grid = (ColorSimpleCell[][]) warehouseEnvironment.getGrid();
+        int targetRow = pos[0] + 1;
+        if (targetRow >= grid.length) {
+            return false;
+        }
+        ColorSimpleCell cell = grid[targetRow][pos[1]];
+        if (cell != null && cell.getContent() != null) {
+            return false;
+        }
+        return navigator.moveToCell(new int[]{targetRow, pos[1]});
+    }
+
     private void broadcastStatus() {
         int[] pos = getLocation();
         String content = String.format(
