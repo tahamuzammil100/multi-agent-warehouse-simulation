@@ -1,6 +1,15 @@
 package fr.emse;
 
-import java.awt.*;
+import java.awt.BasicStroke;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.GradientPaint;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -9,14 +18,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+
 import javax.imageio.ImageIO;
-import javax.swing.*;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
 
 import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
-
-// Project-specific imports for robot rendering
-import fr.emse.DeliveryMission;
 
 /**
  * SimulatorGUI - Main graphical user interface for the warehouse simulation.
@@ -771,8 +779,8 @@ public class SimulatorGUI {
 
         // Right edge (col max): open only for package entries (rows 4-12)
         // Rows 3 and 14 (robot spawns) are closed — robots spawn directly onto the grid
-        g.drawLine(W, 0,              W, 4  * cellSize);  // Top segment
-        g.drawLine(W, 13 * cellSize,  W, H);              // Bottom segment
+        g.drawLine(W, 0,              W, 3  * cellSize);  // Top segment
+        g.drawLine(W, 12 * cellSize,  W, H);              // Bottom segment
 
         g.setStroke(new BasicStroke(1));
     }
