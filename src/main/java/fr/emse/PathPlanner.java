@@ -26,8 +26,8 @@ public class PathPlanner {
     private final int totalColumns;
 
     // Zone separator configuration - prevents crossing between zones
-    private static final int ZONE_BOUNDARY_COLUMN = 18;
-    private static final int[] ZONE_SEPARATORS = {2, 5, 8, 11};
+    private static final int ZONE_BOUNDARY_COLUMN = 22;
+    private static final int[] ZONE_SEPARATORS = {3, 6, 9, 12};
 
     /**
      * Node class for A* algorithm.

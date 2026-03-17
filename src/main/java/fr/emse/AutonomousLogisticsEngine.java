@@ -2,17 +2,21 @@ package fr.emse;
 
 import java.awt.Color;
 import java.io.File;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.ini4j.Ini;
 
 import fr.emse.fayol.maqit.simulator.SimFactory;
-import fr.emse.fayol.maqit.simulator.configuration.IniFile;
-import fr.emse.fayol.maqit.simulator.configuration.SimProperties;
-import fr.emse.fayol.maqit.simulator.components.Message;
 import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.components.ColorSituatedComponent;
+import fr.emse.fayol.maqit.simulator.components.Message;
+import fr.emse.fayol.maqit.simulator.configuration.IniFile;
+import fr.emse.fayol.maqit.simulator.configuration.SimProperties;
 import fr.emse.fayol.maqit.simulator.environment.ColorGridEnvironment;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
 
@@ -93,8 +97,18 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             zoneLayout.getIntermediateCapacityRatio()
         );
         this.rechargingArea = new RechargingAreaManager(zoneLayout.getRechargeArea());
+        PackageScheduler.ArrivalDistribution arrivalDist = PackageScheduler.ArrivalDistribution.UNIFORM;
+        try {
+            Ini bootIni = new Ini(new File("configuration.ini"));
+            String distValue = bootIni.get("warehouse", "arrival_distribution");
+            if (distValue != null) {
+                arrivalDist = PackageScheduler.ArrivalDistribution.fromString(distValue);
+            }
+        } catch (java.io.IOException e) {
+            System.err.println("Warning: could not read arrival_distribution; using UNIFORM");
+        }
         this.packageManager = new PackageScheduler(
-            packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed
+            packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed, arrivalDist
         );
         this.robotManager = new RobotFactory(
             null,  // Will be set after environment creation
@@ -142,10 +156,24 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
     @Override
     public void createRobot() {
         // Deploy warehouse workers (human agents with patrol behavior)
-        int[][] workerLocations = {
-            {4, 8}, {7, 4}, {8, 11}, {8, 17}, {11, 8}, {13, 13}
-        };
-        Color workerVisual = new Color(200, 160, 100);
+        int[][] workerLocations;
+        Color workerVisual;
+        try {
+            Ini ini = new Ini(new File("configuration.ini"));
+            int[] wc = parseInts(ini.get("color", "worker").trim());
+            workerVisual = new Color(wc[0], wc[1], wc[2]);
+            List<int[]> locs = new ArrayList<>();
+            int idx = 1;
+            while (true) {
+                String val = ini.get("workers", "worker" + idx);
+                if (val == null) break;
+                locs.add(parseInts(val.trim()));
+                idx++;
+            }
+            workerLocations = locs.toArray(int[][]::new);
+        } catch (java.io.IOException | NumberFormatException e) {
+            throw new RuntimeException("Failed to load worker config", e);
+        }
 
         for (int i = 0; i < workerLocations.length; i++) {
             WarehouseWorker worker = new WarehouseWorker(
@@ -448,7 +476,12 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         if (before != DeliveryMission.Phase.COMPLETED &&
             after == DeliveryMission.Phase.COMPLETED &&
             !robot.isHeadingToCharge() && !robot.isCharging()) {
+            int[] posBeforeIdle = robot.getLocation().clone();
             robot.clearMission();
+            // Step one cell down so the exit lane stays clear for incoming robots
+            if (robot.stepToIdleCell()) {
+                updateEnvironment(posBeforeIdle, robot.getLocation(), robot.getId());
+            }
             System.out.println("  [IDLE] Robot#" + robot.getId());
         }
     }
@@ -472,13 +505,31 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             });
         }
 
+        // Prepare battery statistics for all robots
+        List<int[]> batteryStats = new ArrayList<>();
+        for (DeliveryBot robot : robotManager.getActiveFleet()) {
+            batteryStats.add(new int[]{
+                robot.getId(),
+                robot.getBatteryLevel(),
+                robot.getMaxBattery()
+            });
+        }
+
+        // Prepare extended metrics {minTime, maxTime, avgTime * 10}
+        int minTime = performanceTracker.getMinDeliveryTime();
+        int maxTime = performanceTracker.getMaxDeliveryTime();
+        int avgTimeX10 = (int) (performanceTracker.getAverageDeliveryTime() * 10);
+        int[] extendedMetrics = {minTime, maxTime, avgTimeX10};
+
         displayWindow.updateStats(
             step,
             performanceTracker.getCompletedCount(),
             totalPackages,
             performanceTracker.getTotalDeliveryTime(),
             activeStats,
-            performanceTracker.getHistoryAsArrays()
+            performanceTracker.getHistoryAsArrays(),
+            batteryStats,
+            extendedMetrics
         );
 
         displayWindow.refresh();
@@ -490,11 +541,25 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
     public void setupDisplay() {
         int cellSize = this.sp.display_width / this.sp.columns;
 
-        // Define delivery zone visual areas
-        int[][] deliveryZones = {
-            {1, 1, 2, 3},     // Zone 1 (top-left)
-            {12, 1, 13, 3}    // Zone 2 (bottom-left)
-        };
+        // Load visual configuration from ini
+        int[][] deliveryZones;
+        Color packageGateColor;
+        int gateRowsStart, gateRowsEnd;
+        int[] separators;
+        try {
+            Ini ini = new Ini(new File("configuration.ini"));
+            deliveryZones = new int[][] {
+                parseInts(ini.get("zones", "delivery_zone1_visual").trim()),
+                parseInts(ini.get("zones", "delivery_zone2_visual").trim())
+            };
+            int[] pgc = parseInts(ini.get("color", "package_gate").trim());
+            packageGateColor = new Color(pgc[0], pgc[1], pgc[2]);
+            gateRowsStart = Integer.parseInt(ini.get("display", "gate_rows_start").trim());
+            gateRowsEnd   = Integer.parseInt(ini.get("display", "gate_rows_end").trim());
+            separators    = parseInts(ini.get("display", "separator_rows").trim());
+        } catch (java.io.IOException | NumberFormatException e) {
+            throw new RuntimeException("Failed to load display config", e);
+        }
 
         // Define waypoint zone visual areas
         int[][] waypointZones = {
@@ -505,20 +570,13 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             zoneLayout.getRechargeArea()
         };
 
-        // Right panel coloring (columns 18-19)
-        Color robotSpawnColor = new Color(120, 185, 225);
-        Color packageGateColor = new Color(150, 215, 150);
-
         Color[] rightPanelColors = new Color[this.sp.rows];
-        rightPanelColors[2] = robotSpawnColor;   // Robot spawn 1
-        rightPanelColors[12] = robotSpawnColor;  // Robot spawn 2
 
-        for (int r = 3; r <= 11; r++) {
-            rightPanelColors[r] = packageGateColor;  // Package gates
+        // Package gates and robot spawn areas - unified color
+        for (int r = gateRowsStart; r <= gateRowsEnd; r++) {
+            rightPanelColors[r] = packageGateColor;
         }
 
-        // Separator lines
-        int[] separators = {2, 5, 8, 11};
         int[][] exits = {
             zoneLayout.getExit(1),
             zoneLayout.getExit(2)
@@ -556,6 +614,15 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
     private String positionKey(int[] pos) {
         return pos[0] + "," + pos[1];
+    }
+
+    private static int[] parseInts(String csv) {
+        String[] parts = csv.split(",");
+        int[] result = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            result[i] = Integer.parseInt(parts[i].trim());
+        }
+        return result;
     }
 
     private void logStepStatus(int step) {
@@ -619,6 +686,8 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         System.out.println("Recharge time: " + rechargeTime + " steps");
         System.out.println("Charge threshold: " + chargeThreshold + " moves");
         System.out.println("Grid line width: " + lineWidth + "px");
+        String distStr = ini.get("warehouse", "arrival_distribution");
+        System.out.println("Arrival distribution: " + (distStr != null ? distStr.toUpperCase() : "UNIFORM"));
 
         AutonomousLogisticsEngine engine = new AutonomousLogisticsEngine(
             properties, packageCount, maxRobotCount,
