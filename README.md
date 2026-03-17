@@ -34,7 +34,7 @@ This project simulates an automated warehouse where delivery robots autonomously
 The simulation includes:
 - **Delivery Robots**: Autonomous agents executing multi-phase delivery missions with battery management
 - **Warehouse Workers**: Human agents acting as dynamic obstacles with random patrol behavior
-- **Package Scheduling**: Time-based package arrivals distributed across simulation timeline
+- **Package Scheduling**: Pallet arrivals modelled by configurable probability distributions (Uniform, Poisson, Geometric, Binomial)
 - **Performance Metrics**: Real-time tracking of delivery times, battery levels, and throughput
 - **Modern Visual GUI**: Live display with enhanced graphics showing warehouse state, robot positions, battery status, and delivery progress with card-based statistics panel
 
@@ -170,7 +170,7 @@ When you run the simulation, you'll see:
    - Performance metrics
 
 2. **Modern GUI window** displaying:
-   - 15×20 warehouse grid with checkered floor pattern
+   - 18×24 warehouse grid with checkered floor pattern
    - Delivery robots (blue agents)
    - Warehouse workers (tan/brown agents moving randomly)
    - Static obstacles (white cells)
@@ -242,8 +242,8 @@ step = 500        # Maximum simulation steps
 
 ```ini
 [environment]
-rows = 15         # Grid height
-columns = 20      # Grid width
+rows = 18         # Grid height
+columns = 24      # Grid width
 ```
 
 ### Warehouse Parameters
@@ -252,13 +252,15 @@ columns = 20      # Grid width
 [warehouse]
 total_pallets = 9              # Number of packages to process
 max_amrs = 2                   # Maximum number of autonomous mobile robots
-battery_autonomy = 120         # Maximum battery capacity (steps)
+battery_autonomy = 100         # Maximum battery capacity (steps)
 recharge_time = 10             # Time required to fully recharge (steps)
 charge_threshold = 20          # Battery level at which robot seeks recharge
-line_stroke = 4                # Grid line thickness (pixels)
+line_stroke = 2                # Grid line thickness (pixels)
 padding = 2                    # Cell padding (pixels)
 show_grid = 1                  # Show grid lines (1) or hide (0)
 intermediate_capacity_ratio = 0.5  # Capacity ratio for intermediate storage
+# Arrival distribution for pallets: uniform | poisson | geometric | binomial
+arrival_distribution = poisson
 ```
 
 ### Zone Definitions
@@ -267,33 +269,33 @@ The warehouse is divided into functional zones:
 
 ```ini
 [zones]
-# Package entry gates (right edge, column 19)
-package_gate1 = 3,19
-package_gate2 = 4,19
+# Package entry gates (right edge, column 23)
+package_gate1 = 3,23
+package_gate2 = 4,23
 ...
 
 # Robot spawn points
-robot_spawn_zone1 = 2,19   # Top zone robots
-robot_spawn_zone2 = 12,19  # Bottom zone robots
+robot_spawn_zone1 = 4,22   # Top zone robots
+robot_spawn_zone2 = 12,22  # Bottom zone robots
 
 # Waypoints (intermediate checkpoints)
-waypoint_zone1 = 4,11
-waypoint_zone2 = 10,11
+waypoint_zone1 = 5,14
+waypoint_zone2 = 12,14
 
 # Intermediate storage areas (minRow,minCol,maxRow,maxCol)
-intermediate_area_zone1 = 3,11,5,12
-intermediate_area_zone2 = 9,11,11,12
+intermediate_area_zone1 = 4,12,6,13
+intermediate_area_zone2 = 11,12,13,13
 
 # Recharge area for battery management
-recharge_area = 6,12,7,13
+recharge_area = 8,12,9,13
 
 # Delivery targets
 target_zone1 = 2,2    # Top-left corner
-target_zone2 = 13,2   # Bottom-left corner
+target_zone2 = 16,2   # Bottom-left corner
 
 # Exit points (left edge)
-exit_zone1 = 1,0
-exit_zone2 = 13,0
+exit_zone1 = 2,0
+exit_zone2 = 16,0
 ```
 
 ### Obstacles
@@ -616,20 +618,22 @@ After A* finds target:
 
 ### 4. Package Scheduling
 
-**Time-Based Arrivals:**
+**Distribution-Based Arrivals:**
 
-```java
-// Packages arrive in first half of simulation
-int distributionWindow = min(totalSteps / 2, 200);
+Pallet arrival times are generated according to the `arrival_distribution` setting:
 
-for each package:
-    arrivalTime = random(0, distributionWindow)
+| Distribution | Behaviour |
+|---|---|
+| `uniform` | Each pallet gets a uniformly-random step within the scheduling window (original) |
+| `poisson` | Classic queuing model — draws Poisson(λ) arrivals per step; rate λ = pallets/window |
+| `geometric` | Memoryless inter-arrivals — gap between pallets ~ Geometric(p); bursty patterns |
+| `binomial` | Each pallet's step ~ Binomial(window−1, 0.5); bell-shaped curve around midpoint |
 
-// Sort by arrival time
-packages.sort(by arrivalTime)
+Switch distributions in `configuration.ini` — no code changes needed:
+```ini
+[warehouse]
+arrival_distribution = poisson   # uniform | poisson | geometric | binomial
 ```
-
-This prevents overwhelming the system with simultaneous arrivals.
 
 ---
 
@@ -686,8 +690,8 @@ field = 5  # Increase from 3 (larger perception range)
 
 ```ini
 [environment]
-rows = 20     # Increase from 15
-columns = 30  # Increase from 20
+rows = 20     # Increase from 18
+columns = 30  # Increase from 24
 ```
 
 **Important:** You must also adjust zone coordinates in `[zones]` section to match new grid dimensions.
@@ -870,6 +874,23 @@ For large-scale simulations (100+ robots):
 ---
 
 ## Recent Enhancements
+
+### Version 2.2 Updates
+
+**Probabilistic Pallet Arrivals:**
+- Pallets in the entry area (zone Ax) now arrive according to a configurable probability distribution
+- Supported models: **Uniform** (original), **Poisson** (classic queuing), **Geometric** (memoryless bursty), **Binomial** (bell-curve)
+- Configured via a single `arrival_distribution` key in `configuration.ini` — no code changes required
+- Poisson sampler uses Knuth's exact algorithm (normal approximation for large λ)
+- Geometric sampler uses log-inverse CDF for exact geometric inter-arrivals
+
+**Idle Robot Clearance:**
+- After delivering a package and becoming idle, a robot automatically steps one cell down from the exit lane
+- Prevents idle robots from blocking incoming robots returning from delivery
+
+**Grid Expansion:**
+- Warehouse upgraded from 15×20 to **18×24** cells
+- All zone coordinates updated accordingly
 
 ### Version 2.0 Updates
 

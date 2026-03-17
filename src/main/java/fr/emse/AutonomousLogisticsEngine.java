@@ -97,8 +97,18 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
             zoneLayout.getIntermediateCapacityRatio()
         );
         this.rechargingArea = new RechargingAreaManager(zoneLayout.getRechargeArea());
+        PackageScheduler.ArrivalDistribution arrivalDist = PackageScheduler.ArrivalDistribution.UNIFORM;
+        try {
+            Ini bootIni = new Ini(new File("configuration.ini"));
+            String distValue = bootIni.get("warehouse", "arrival_distribution");
+            if (distValue != null) {
+                arrivalDist = PackageScheduler.ArrivalDistribution.fromString(distValue);
+            }
+        } catch (java.io.IOException e) {
+            System.err.println("Warning: could not read arrival_distribution; using UNIFORM");
+        }
         this.packageManager = new PackageScheduler(
-            packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed
+            packageCount, properties.step, zoneLayout.getPackageGates(), properties.seed, arrivalDist
         );
         this.robotManager = new RobotFactory(
             null,  // Will be set after environment creation
@@ -676,6 +686,8 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
         System.out.println("Recharge time: " + rechargeTime + " steps");
         System.out.println("Charge threshold: " + chargeThreshold + " moves");
         System.out.println("Grid line width: " + lineWidth + "px");
+        String distStr = ini.get("warehouse", "arrival_distribution");
+        System.out.println("Arrival distribution: " + (distStr != null ? distStr.toUpperCase() : "UNIFORM"));
 
         AutonomousLogisticsEngine engine = new AutonomousLogisticsEngine(
             properties, packageCount, maxRobotCount,
