@@ -510,8 +510,8 @@ public class AutonomousLogisticsEngine extends SimFactory<ColorGridEnvironment, 
 
         // Define delivery zone visual areas
         int[][] deliveryZones = {
-            {1, 1, 2, 3},     // Zone 1 (top-left)
-            {12, 1, 13, 3}    // Zone 2 (bottom-left)
+            {2, 2, 4, 4},     // Zone 1 (top-left)
+            {15, 2, 17, 4}    // Zone 2 (bottom-left)
         };
 
         // Define waypoint zone visual areas

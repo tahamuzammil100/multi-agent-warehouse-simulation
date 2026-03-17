@@ -1,6 +1,7 @@
 package fr.emse;
 
 import java.awt.*;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -13,6 +14,9 @@ import javax.swing.*;
 
 import fr.emse.fayol.maqit.simulator.components.ColorObstacle;
 import fr.emse.fayol.maqit.simulator.environment.ColorSimpleCell;
+
+// Project-specific imports for robot rendering
+import fr.emse.DeliveryMission;
 
 /**
  * SimulatorGUI - Main graphical user interface for the warehouse simulation.
@@ -88,15 +92,20 @@ public class SimulatorGUI {
     private BufferedImage obstacleImage;
     private BufferedImage packageImage;
     private BufferedImage robotImage;
+    private BufferedImage robotWithPackageImage;
 
-    private static final Color BG        = new Color(245, 245, 245);
-    private static final Color GRID_LINE = new Color(210, 210, 210);
+    // Modern color scheme for warehouse floor
+    private static final Color BG        = new Color(240, 242, 245);
+    private static final Color GRID_LINE = new Color(200, 205, 210);
+    private static final Color FLOOR_TILE_LIGHT = new Color(245, 247, 250);
+    private static final Color FLOOR_TILE_DARK = new Color(235, 237, 240);
+    private static final Color SHADOW_COLOR = new Color(0, 0, 0, 15);
 
     /** Width of the statistics side-panel in pixels. */
     private static final int STATS_WIDTH = 260;
 
     /** First column of the right-side coloured panel. */
-    private static final int RIGHT_COL = 18;
+    private static final int RIGHT_COL = 22;
 
     // -------------------------------------------------------------------------
 
@@ -130,6 +139,7 @@ public class SimulatorGUI {
         loadObstacleImage();
         loadPackageImage();
         loadRobotImage();
+        loadRobotWithPackageImage();
     }
 
     private void loadHumanImage() {
@@ -200,6 +210,20 @@ public class SimulatorGUI {
             }
         } catch (IOException e) {
             System.out.println("[Display] Failed to load robot image: " + e.getMessage());
+        }
+    }
+
+    private void loadRobotWithPackageImage() {
+        try {
+            File f = new File("src/main/resources/robot_package.png");
+            if (f.exists()) {
+                robotWithPackageImage = ImageIO.read(f);
+                System.out.println("[Display] Robot with package image loaded: " + f.getAbsolutePath());
+            } else {
+                System.out.println("[Display] Robot with package image not found at: " + f.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.out.println("[Display] Failed to load robot with package image: " + e.getMessage());
         }
     }
 
@@ -547,59 +571,102 @@ public class SimulatorGUI {
         // Shift all drawing by padding so space appears around all sides of the grid
         g.translate(padding, padding);
 
-        // --- Pass 1: cell backgrounds ----------------------------------------
+        // --- Pass 1: Modern checkered floor pattern ----------------------------------------
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
+                int px = c * cellSize;
+                int py = r * cellSize;
+
+                // Right panel zone colors
                 if (c >= RIGHT_COL && r < rowRightColors.length && rowRightColors[r] != null) {
-                    g.setColor(rowRightColors[r]);
+                    // Create gradient effect for zone panels
+                    GradientPaint gradient = new GradientPaint(
+                        px, py, rowRightColors[r],
+                        px + cellSize, py + cellSize, brighten(rowRightColors[r], 0.15f)
+                    );
+                    g.setPaint(gradient);
+                    g.fillRect(px, py, cellSize, cellSize);
                 } else {
-                    g.setColor(BG);
+                    // Checkered warehouse floor pattern
+                    boolean isLightTile = (r + c) % 2 == 0;
+                    g.setColor(isLightTile ? FLOOR_TILE_LIGHT : FLOOR_TILE_DARK);
+                    g.fillRect(px, py, cellSize, cellSize);
+
+                    // Add subtle inner shadow for depth
+                    g.setColor(SHADOW_COLOR);
+                    g.drawLine(px, py, px + cellSize - 1, py); // Top edge shadow
+                    g.drawLine(px, py, px, py + cellSize - 1); // Left edge shadow
                 }
-                g.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
             }
         }
 
-        // --- Pass 2: yellow zones (semi-transparent) -------------------------
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
-        g.setColor(new Color(240, 215, 100));
+        // --- Pass 2: yellow zones (intermediate storage with enhanced styling) -------------------------
         for (int[] z : yellowZones) {
             int px = z[1] * cellSize, py = z[0] * cellSize;
             int w  = (z[3] - z[1] + 1) * cellSize;
             int h  = (z[2] - z[0] + 1) * cellSize;
-            g.fillRect(px, py, w, h);
-        }
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
 
-        // --- Pass 3: recharge zones (semi-transparent cyan) ------------------
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.60f));
-        g.setColor(new Color(120, 220, 240));
+            // Gradient fill for intermediate storage zones
+            GradientPaint yellowGradient = new GradientPaint(
+                px, py, new Color(255, 235, 120, 140),
+                px + w, py + h, new Color(240, 215, 100, 140)
+            );
+            g.setPaint(yellowGradient);
+            g.fillRoundRect(px + 2, py + 2, w - 4, h - 4, 12, 12);
+
+            // Border with shadow effect
+            g.setColor(new Color(220, 180, 50, 200));
+            g.setStroke(new BasicStroke(2.5f));
+            g.drawRoundRect(px + 2, py + 2, w - 4, h - 4, 12, 12);
+            g.setStroke(new BasicStroke(1));
+
+            // Label
+            g.setColor(new Color(160, 120, 30));
+            g.setFont(new Font("SansSerif", Font.BOLD, Math.max(9, cellSize / 4)));
+            String label = "STORAGE";
+            int labelWidth = g.getFontMetrics().stringWidth(label);
+            g.drawString(label, px + (w - labelWidth) / 2, py + h / 2 + 4);
+        }
+
+        // --- Pass 3: recharge zones (enhanced charging station styling) ------------------
         for (int[] z : rechargeZones) {
             int px = z[1] * cellSize, py = z[0] * cellSize;
             int w  = (z[3] - z[1] + 1) * cellSize;
             int h  = (z[2] - z[0] + 1) * cellSize;
-            g.fillRect(px, py, w, h);
+
+            // Animated charging gradient (cyan to electric blue)
+            GradientPaint chargeGradient = new GradientPaint(
+                px, py, new Color(100, 220, 255, 160),
+                px + w, py + h, new Color(60, 180, 240, 160)
+            );
+            g.setPaint(chargeGradient);
+            g.fillRoundRect(px + 2, py + 2, w - 4, h - 4, 10, 10);
+
+            // Electric border effect
+            g.setColor(new Color(20, 140, 200, 220));
+            g.setStroke(new BasicStroke(3f));
+            g.drawRoundRect(px + 2, py + 2, w - 4, h - 4, 10, 10);
+
+            // Inner glow effect
+            g.setColor(new Color(180, 240, 255, 80));
+            g.setStroke(new BasicStroke(1.5f));
+            g.drawRoundRect(px + 4, py + 4, w - 8, h - 8, 8, 8);
+            g.setStroke(new BasicStroke(1));
+
+            // Charging icon and label
+            g.setColor(new Color(10, 80, 120));
+            g.setFont(new Font("SansSerif", Font.BOLD, Math.max(11, cellSize / 3)));
+            String label = "⚡ CHARGE";
+            int labelWidth = g.getFontMetrics().stringWidth(label);
+            g.drawString(label, px + (w - labelWidth) / 2, py + h / 2 + 4);
         }
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
-        g.setColor(new Color(20, 110, 130));
-        g.setStroke(new BasicStroke(2f));
-        for (int[] z : rechargeZones) {
-            int px = z[1] * cellSize, py = z[0] * cellSize;
-            int w  = (z[3] - z[1] + 1) * cellSize;
-            int h  = (z[2] - z[0] + 1) * cellSize;
-            g.drawRect(px + 1, py + 1, Math.max(1, w - 2), Math.max(1, h - 2));
-            g.setColor(new Color(15, 90, 110));
-            g.setFont(new Font("SansSerif", Font.BOLD, Math.max(10, cellSize / 3)));
-            g.drawString("CHG", px + 4, py + Math.max(14, cellSize / 2));
-            g.setColor(new Color(20, 110, 130));
-        }
-        g.setStroke(new BasicStroke(1));
 
         // --- Pass 4: hatched red rectangular zones ---------------------------
         for (int[] z : ovalZones) {
             drawHatchedRect(g, z[0], z[1], z[2], z[3]);
         }
 
-        // --- Pass 5: exit markers --------------------------------------------
+        // --- Pass 5: enhanced exit markers --------------------------------------------
         for (int[] exit : exitCells) {
             if (exit == null || exit.length < 2) continue;
             int row = exit[0];
@@ -609,12 +676,24 @@ public class SimulatorGUI {
             int px = col * cellSize;
             int py = row * cellSize;
 
-            g.setColor(new Color(140, 230, 230));
-            g.fillRect(px, py, cellSize, cellSize);
-            g.setColor(new Color(25, 120, 120));
-            g.setStroke(new BasicStroke(2));
-            g.drawRect(px + 1, py + 1, cellSize - 2, cellSize - 2);
+            // Gradient exit zone
+            GradientPaint exitGradient = new GradientPaint(
+                px, py, new Color(150, 240, 230),
+                px + cellSize, py + cellSize, new Color(100, 200, 200)
+            );
+            g.setPaint(exitGradient);
+            g.fillRoundRect(px + 2, py + 2, cellSize - 4, cellSize - 4, 8, 8);
+
+            // Border
+            g.setColor(new Color(40, 140, 140));
+            g.setStroke(new BasicStroke(2.5f));
+            g.drawRoundRect(px + 2, py + 2, cellSize - 4, cellSize - 4, 8, 8);
             g.setStroke(new BasicStroke(1));
+
+            // Exit arrow indicator
+            g.setColor(new Color(20, 100, 100));
+            g.setFont(new Font("SansSerif", Font.BOLD, Math.max(14, cellSize / 2)));
+            g.drawString("→", px + cellSize / 4, py + 2 * cellSize / 3);
         }
 
         // --- Pass 6: grid lines ----------------------------------------------
@@ -684,49 +763,79 @@ public class SimulatorGUI {
         g.drawLine(0, 0, W, 0);
         g.drawLine(0, H, W, H);
 
-        // Left edge (col 0): open for zone-1 exit (rows 0-2) and zone-2 exit (rows 12-14)
-        // Draw only the middle segment: from bottom of row 2 to top of row 12
-        g.drawLine(0, 3 * cellSize, 0, 12 * cellSize);
+        // Left edge (col 0): open for zone-1 exit (row 2) and zone-2 exit (row 16)
+        // Draw three segments: top (0 to row 2), middle (row 3 to row 15), bottom (row 17 to end)
+        g.drawLine(0, 0,              0, 2  * cellSize);  // Top segment
+        g.drawLine(0, 3 * cellSize,   0, 16 * cellSize);  // Middle segment
+        g.drawLine(0, 17 * cellSize,  0, H);              // Bottom segment
 
-        // Right edge (col max): open only for package entries (rows 3-11)
-        // Rows 2 and 12 (robot entries) are closed — robots spawn directly onto the grid
-        g.drawLine(W, 0,             W, 3  * cellSize);
-        g.drawLine(W, 12 * cellSize, W, H);
+        // Right edge (col max): open only for package entries (rows 4-12)
+        // Rows 3 and 14 (robot spawns) are closed — robots spawn directly onto the grid
+        g.drawLine(W, 0,              W, 4  * cellSize);  // Top segment
+        g.drawLine(W, 13 * cellSize,  W, H);              // Bottom segment
 
         g.setStroke(new BasicStroke(1));
     }
 
-    /** Draws a hatched red rectangle spanning the given grid row/col bounds. */
+    /**
+     * Creates a brighter version of the given color
+     */
+    private Color brighten(Color color, float factor) {
+        int r = Math.min(255, (int) (color.getRed() * (1 + factor)));
+        int g = Math.min(255, (int) (color.getGreen() * (1 + factor)));
+        int b = Math.min(255, (int) (color.getBlue() * (1 + factor)));
+        return new Color(r, g, b);
+    }
+
+    /** Draws an enhanced delivery target zone with modern styling */
     private void drawHatchedRect(Graphics2D g, int minR, int minC, int maxR, int maxC) {
         int px = minC * cellSize;
         int py = minR * cellSize;
         int w  = (maxC - minC + 1) * cellSize;
         int h  = (maxR - minR + 1) * cellSize;
 
-        Shape rect    = new Rectangle(px + 3, py + 3, Math.max(1, w - 6), Math.max(1, h - 6));
+        // Rounded rectangle for modern look
+        RoundRectangle2D rect = new RoundRectangle2D.Float(px + 3, py + 3, Math.max(1, w - 6), Math.max(1, h - 6), 15, 15);
         Shape oldClip = g.getClip();
 
-        // Light pink fill
-        g.setClip(rect);
-        g.setColor(new Color(255, 220, 220));
+        // Gradient background (light pink to deeper pink)
+        GradientPaint deliveryGradient = new GradientPaint(
+            px, py, new Color(255, 230, 230),
+            px + w, py + h, new Color(255, 210, 210)
+        );
+        g.setPaint(deliveryGradient);
         g.fill(rect);
 
-        // Diagonal red hatching
-        g.setColor(new Color(200, 50, 50));
-        g.setStroke(new BasicStroke(1.5f));
+        // Diagonal red hatching with better spacing
+        g.setClip(rect);
+        g.setColor(new Color(220, 80, 80, 120));
+        g.setStroke(new BasicStroke(2f));
         int diag = w + h;
-        for (int d = -diag; d < diag; d += 10) {
+        for (int d = -diag; d < diag; d += 12) {
             g.drawLine(px + d, py + h, px + d + h, py);
         }
 
         g.setClip(oldClip);
+
+        // Modern border with shadow effect
+        g.setColor(new Color(200, 60, 60));
+        g.setStroke(new BasicStroke(3f));
+        g.draw(rect);
+
+        // Inner highlight border
+        g.setColor(new Color(255, 150, 150, 100));
+        g.setStroke(new BasicStroke(1.5f));
+        RoundRectangle2D innerRect = new RoundRectangle2D.Float(px + 5, py + 5, Math.max(1, w - 10), Math.max(1, h - 10), 12, 12);
+        g.draw(innerRect);
+
         g.setStroke(new BasicStroke(1));
 
-        // Rectangle border
-        g.setColor(new Color(180, 40, 40));
-        g.setStroke(new BasicStroke(2));
-        g.draw(rect);
-        g.setStroke(new BasicStroke(1));
+        // Delivery zone label
+        g.setColor(new Color(150, 30, 30));
+        g.setFont(new Font("SansSerif", Font.BOLD, Math.max(10, cellSize / 3)));
+        String label = "DELIVERY";
+        int labelWidth = g.getFontMetrics().stringWidth(label);
+        g.drawString(label, px + (w - labelWidth) / 2, py + h / 2 + 4);
     }
 
     private void drawHuman(Graphics2D g, int px, int py) {
@@ -744,9 +853,16 @@ public class SimulatorGUI {
     }
 
     private void drawRobot(Graphics2D g, int px, int py, DeliveryBot robot) {
-        if (robotImage != null) {
-            // Draw robot image scaled to cell size
-            g.drawImage(robotImage, px, py, cellSize, cellSize, null);
+        // Check if robot is carrying a package (DROPOFF phase means it has picked up the package)
+        DeliveryMission.Phase phase = robot.getMissionPhase();
+        boolean hasPackage = (phase == DeliveryMission.Phase.DROPOFF);
+
+        // Use robot_package.png if carrying, robot.png otherwise
+        BufferedImage imageToUse = hasPackage ? robotWithPackageImage : robotImage;
+
+        if (imageToUse != null) {
+            // Draw appropriate robot image scaled to cell size
+            g.drawImage(imageToUse, px, py, cellSize, cellSize, null);
         } else {
             // Fallback: draw as rounded rectangle if image not loaded
             int[] rgb = robot.getColor();
