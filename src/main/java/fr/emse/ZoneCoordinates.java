@@ -8,15 +8,6 @@ import org.ini4j.Ini;
 
 /**
  * ZoneCoordinates - Loads and manages warehouse spatial zones from configuration.
- *
- * Reads zone layout from configuration.ini file:
- * - Package entry gates
- * - Robot spawn locations
- * - Intermediate waypoints
- * - Delivery targets
- * - Exit zones
- *
- * This makes the warehouse layout fully configurable without code changes.
  */
 public class ZoneCoordinates {
 
@@ -29,34 +20,33 @@ public class ZoneCoordinates {
     private final int[] targetZone2;
     private final int[] exitZone1;
     private final int[] exitZone2;
+    private final int[] intermediateAreaZone1;
+    private final int[] intermediateAreaZone2;
+    private final int[] rechargeArea;
+    private final double intermediateCapacityRatio;
 
-    /**
-     * Loads all zone coordinates from configuration file.
-     *
-     * @param configPath Path to configuration.ini file
-     */
     public ZoneCoordinates(String configPath) {
         try {
             Ini config = new Ini(new File(configPath));
 
-            // Load package gates
             this.packageGates = loadPackageGates(config);
-
-            // Load robot spawn points
             this.robotSpawnZone1 = parseCoordinate(config.get("zones", "robot_spawn_zone1"));
             this.robotSpawnZone2 = parseCoordinate(config.get("zones", "robot_spawn_zone2"));
-
-            // Load waypoints
             this.waypointZone1 = parseCoordinate(config.get("zones", "waypoint_zone1"));
             this.waypointZone2 = parseCoordinate(config.get("zones", "waypoint_zone2"));
-
-            // Load delivery targets
             this.targetZone1 = parseCoordinate(config.get("zones", "target_zone1"));
             this.targetZone2 = parseCoordinate(config.get("zones", "target_zone2"));
-
-            // Load exit points
             this.exitZone1 = parseCoordinate(config.get("zones", "exit_zone1"));
             this.exitZone2 = parseCoordinate(config.get("zones", "exit_zone2"));
+
+            this.intermediateAreaZone1 = parseArea(config.get("zones", "intermediate_area_zone1"), waypointZone1);
+            this.intermediateAreaZone2 = parseArea(config.get("zones", "intermediate_area_zone2"), waypointZone2);
+            this.rechargeArea = parseArea(config.get("zones", "recharge_area"), robotSpawnZone1);
+
+            String ratioValue = config.get("warehouse", "intermediate_capacity_ratio");
+            this.intermediateCapacityRatio = (ratioValue == null || ratioValue.trim().isEmpty())
+                    ? 0.5
+                    : Double.parseDouble(ratioValue.trim());
 
             System.out.println("Loaded zone configuration from " + configPath);
             System.out.println("  Package gates: " + packageGates.length);
@@ -69,10 +59,6 @@ public class ZoneCoordinates {
         }
     }
 
-    /**
-     * Loads all package entry gates from configuration.
-     * Reads package_gate1, package_gate2, etc. until no more are found.
-     */
     private int[][] loadPackageGates(Ini config) {
         List<int[]> gates = new ArrayList<>();
         int index = 1;
@@ -80,11 +66,9 @@ public class ZoneCoordinates {
         while (true) {
             String key = "package_gate" + index;
             String value = config.get("zones", key);
-
             if (value == null || value.trim().isEmpty()) {
                 break;
             }
-
             gates.add(parseCoordinate(value));
             index++;
         }
@@ -96,12 +80,6 @@ public class ZoneCoordinates {
         return gates.toArray(new int[0][]);
     }
 
-    /**
-     * Parses a coordinate string in "row,column" format.
-     *
-     * @param coordinateString String to parse (e.g., "3,19")
-     * @return Coordinate array [row, col]
-     */
     private int[] parseCoordinate(String coordinateString) {
         if (coordinateString == null || coordinateString.trim().isEmpty()) {
             throw new IllegalArgumentException("Missing coordinate in configuration");
@@ -112,7 +90,6 @@ public class ZoneCoordinates {
             if (parts.length != 2) {
                 throw new IllegalArgumentException("Invalid coordinate format: " + coordinateString);
             }
-
             int row = Integer.parseInt(parts[0].trim());
             int col = Integer.parseInt(parts[1].trim());
             return new int[]{row, col};
@@ -122,49 +99,55 @@ public class ZoneCoordinates {
         }
     }
 
-    // Getters
+    private int[] parseArea(String areaString, int[] fallbackCenter) {
+        if (areaString == null || areaString.trim().isEmpty()) {
+            int row = fallbackCenter[0];
+            int col = fallbackCenter[1];
+            return new int[]{row, col, row, col};
+        }
 
-    /**
-     * Gets all package entry gates.
-     * @return Array of entry coordinates
-     */
+        String[] parts = areaString.trim().split(",");
+        if (parts.length != 4) {
+            throw new IllegalArgumentException("Invalid area format: " + areaString);
+        }
+
+        int minRow = Integer.parseInt(parts[0].trim());
+        int minCol = Integer.parseInt(parts[1].trim());
+        int maxRow = Integer.parseInt(parts[2].trim());
+        int maxCol = Integer.parseInt(parts[3].trim());
+        return new int[]{minRow, minCol, maxRow, maxCol};
+    }
+
     public int[][] getPackageGates() {
         return packageGates;
     }
 
-    /**
-     * Gets robot spawn point for a specific zone.
-     * @param zoneNumber Zone identifier (1 or 2)
-     * @return Spawn coordinates
-     */
     public int[] getRobotSpawn(int zoneNumber) {
         return (zoneNumber == 1) ? robotSpawnZone1 : robotSpawnZone2;
     }
 
-    /**
-     * Gets waypoint coordinates for a specific zone.
-     * @param zoneNumber Zone identifier (1 or 2)
-     * @return Waypoint coordinates
-     */
     public int[] getWaypoint(int zoneNumber) {
         return (zoneNumber == 1) ? waypointZone1 : waypointZone2;
     }
 
-    /**
-     * Gets delivery target coordinates for a specific zone.
-     * @param zoneNumber Zone identifier (1 or 2)
-     * @return Target coordinates
-     */
     public int[] getDeliveryTarget(int zoneNumber) {
         return (zoneNumber == 1) ? targetZone1 : targetZone2;
     }
 
-    /**
-     * Gets exit coordinates for a specific zone.
-     * @param zoneNumber Zone identifier (1 or 2)
-     * @return Exit coordinates
-     */
     public int[] getExit(int zoneNumber) {
         return (zoneNumber == 1) ? exitZone1 : exitZone2;
+    }
+
+    public int[] getIntermediateArea(int zoneNumber) {
+        int[] area = (zoneNumber == 1) ? intermediateAreaZone1 : intermediateAreaZone2;
+        return area.clone();
+    }
+
+    public int[] getRechargeArea() {
+        return rechargeArea.clone();
+    }
+
+    public double getIntermediateCapacityRatio() {
+        return intermediateCapacityRatio;
     }
 }
